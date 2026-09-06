@@ -1,0 +1,71 @@
+# ============ shopguide-rag 业务配置 ============
+# 密钥（ANTHROPIC_API_KEY 等）只从 .env / 环境变量读，绝不写进本文件。
+#
+# mode:
+#   offline —— 默认：LLM/视觉/Embedding 全走 Mock，向量库走 Qdrant 内存/本地，
+#              无 Docker 无 key 即可跑通测试/评测/API 冒烟（确定性）。
+#   dev     —— 阶段 B（Docker 装好后）：接真 LLM(Claude)/真服务(PG/Redis/Qdrant server)。
+mode: offline
+
+app:
+  name: shopguide-rag
+  log_level: INFO
+  data_dir: ./data
+  fixtures_dir: ./fixtures
+
+# ---- 商品知识库（种子数据源）----
+catalog:
+  file: ./fixtures/catalog/products.json   # 唯一数据源：结构化 3C SKU
+  # 每个 SKU 会渲染成一份 Markdown 再标题感知切块；source 用 SKU id，payload 带 product_id
+  # 生成入口：core/catalog/docs.py::product_to_markdown + core/ingest/pipeline.py
+
+llm:
+  provider: mock          # mock | anthropic（Claude）
+  model: claude-sonnet-5  # anthropic 时生效
+  api_key_env: ANTHROPIC_API_KEY
+  timeout_sec: 60.0
+  temperature: 0.3
+
+vision:
+  provider: mock          # mock | anthropic（Claude 视觉，阶段 B）
+  model: claude-sonnet-5
+
+embedding:
+  provider: mock          # mock | dashscope（需 key，阶段 B 预留）
+  model: text-embedding-v3
+  dimension: 1024         # 与 vector_db 集合维度一致
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+vector_db:
+  provider: qdrant_local  # qdrant_local(内存/本地路径) | qdrant_server(阶段 B 真容器)
+  path: ./data/qdrant
+  collection: shopguide_products
+  url: http://localhost:6333   # provider=qdrant_server 时用
+
+chunking:
+  max_chars: 800          # 商品规格 doc 较短，块小一点更精准
+  overlap_chars: 80
+
+retrieval:
+  dense_top_k: 20
+  bm25_top_k: 20
+  rrf_k: 60
+  rerank_top_n: 8         # 融合后精排保留数
+  final_top_n: 5          # 返回给 Agent 的产品数（按 product_id 去重后）
+
+agent:
+  max_tool_rounds: 3      # 工具调用有界轮数（防失控，面试可讲）
+  min_citations: 1        # 无任何检索引用就不硬答 → 转引导提问
+
+store:
+  provider: memory        # memory | file（会话存储；PG/Redis 阶段 B 接入）
+  path: ./data/sessions
+
+eval:
+  output_dir: ./data/eval
+  top_k: 5
+  thresholds:
+    hybrid_recall_at_k: 0.9    # 检索 Recall@5 下限（离线 mock 基线实测回填）
+    hybrid_mrr_at_k: 0.9       # 检索 MRR@5 下限
+    grounded_rate_min: 1.0     # 回答全部有据（无幻觉）
+    bad_refusal_rate_min: 1.0  # 对抗不可答样例必须拒绝/转提问

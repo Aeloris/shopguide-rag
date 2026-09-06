@@ -1,0 +1,33 @@
+[project]
+name = "shopguide-rag"
+version = "0.1.0"
+description = "多模态 RAG 电商智能导购 Agent：混合检索(RRF) + 工具调用 Agent + 视觉入口 + 评测门禁"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "python-multipart>=0.0.32",
+    "pyyaml>=6.0.3",
+    "qdrant-client>=1.19.0",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/Aeloris/shopguide-rag"
+Repository = "https://github.com/Aeloris/shopguide-rag"
+Issues = "https://github.com/Aeloris/shopguide-rag/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]
