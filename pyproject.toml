@@ -17,6 +17,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "qdrant-client>=1.19.0",
     "redis>=5.2.0",
+    "streamlit>=1.63.0",
     "uvicorn[standard]>=0.52.4",
 ]
 

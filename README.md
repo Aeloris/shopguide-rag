@@ -55,6 +55,26 @@ curl -s 'localhost:8000/api/products?category=phone&max_price=3000'
 
 OpenAPI 文档：`http://localhost:8000/docs`
 
+## Streamlit 演示（可视化前端，可选）
+
+直接 import 引擎、不依赖 API/容器的演示界面，**离线 mock 即可全跑**：
+
+```bash
+uv sync                                  # 首次（拉取 streamlit 依赖）
+uv run streamlit run scripts/demo_ui.py  # 打开 http://localhost:8501
+```
+
+三个 Tab：
+- **💬 导购对话**：聊天框 / 侧边栏示例按钮 → 可答给商品卡（引用只来自检索命中白名单）、
+  不可答给拒答 banner（交易/实时行情/未来/真机实测/库内无匹配五类）+ 工具轨迹；
+  折叠区可传图走多模态路径（offline 空文本 → Vision mock 需求抽取）。
+- **📦 商品库**：13 SKU 一览 + 单款规格/卖点（诚实口径：仅本离线语料）。
+- **🔍 混合检索调试**：`POST /api/search` 的可视化（BM25+Dense→RRF→重排，top-5）。
+
+UI 右下角如实显示当前 provider：默认 `mode=offline · llm/vision/embedding=mock`；设
+`SHOPGUIDE_CONFIG=config/config.live.yaml`（且 `.env` 有真 key）即切 live 真链（真 LLM /
+真语义 embedding / 真 Qwen-VL 视觉）。示例按钮只用词面可达的域内查询，不搬语义量表金句。
+
 ## 真服务（Docker，阶段 B 数据平面已落地）
 
 `deploy/docker-compose.yml` 起三个依赖容器，dev 配置下会话/缓存/向量库走真服务：
@@ -185,7 +205,7 @@ llm/          Provider 抽象：视觉 mock / anthropic / dashscope(Qwen-VL) + L
 app/          FastAPI：/health + /api/{chat,search,products}（search 带热点缓存）
 evals/        gold 检索集 + 对抗集 + 检索/Agent harness + run.py 门禁 + 语义量表(run_semantic)
 fixtures/     catalog/products.json(13 SKU) + vision/sample.json
-scripts/      make_catalog.py（确定性生成种子）/ smoke_core.py
+scripts/      make_catalog.py（确定性生成种子）/ smoke_core.py / demo_ui.py（Streamlit 演示前端）
 deploy/       docker-compose.yml(postgres16/redis7/qdrant) + .env.docker
 tests/        101 离线确定性测试 + 4 Docker 集成测试（无容器自动跳过）
 docs/         架构 / 检索 / Agent / 评测 四篇
