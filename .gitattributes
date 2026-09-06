@@ -1,0 +1,6 @@
+# 统一 LF 行尾（Windows + Git 混用仓库防 CRLF 噪音）
+* text=auto eol=lf
+
+# 二进制/生成物不参与行尾处理
+*.json text eol=lf
+uv.lock text eol=lf
