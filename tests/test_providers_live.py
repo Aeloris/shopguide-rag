@@ -160,3 +160,80 @@ def test_dashscope_embedding_single_small_batch(monkeypatch) -> None:
 
     assert fake.request_sizes == [2]
     assert len(vecs) == 2
+
+
+# ---- Qwen-VL（DashScope OpenAI 兼容视觉）----
+
+
+class _FakeChatResp:
+    status_code = 200
+
+    def __init__(self, text):
+        self._text = text
+
+    def json(self):
+        return {"choices": [{"message": {"content": self._text}}]}
+
+
+class _FakeChatClient:
+    def __init__(self):
+        self.sent: list[tuple[str, dict, dict]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, *, headers=None, json=None):
+        self.sent.append((url, headers, json))
+        return _FakeChatResp("想要一台拍照好的旗舰直屏手机")
+
+
+def _dashscope_vision_settings() -> Settings:
+    s = Settings.from_yaml()
+    s.vision.provider = "dashscope"
+    s.vision.model = "qwen-vl-max"
+    return s
+
+
+def test_vision_factory_dashscope_constructs_without_key() -> None:
+    """dashscope 分支构造不抛（key 只在 describe 时读）→ 缺 key 不误伤 build。"""
+    from llm.dashscope_vision import DashScopeQwenVision
+    from llm.vision import get_vision_provider
+
+    provider = get_vision_provider(_dashscope_vision_settings())
+    assert isinstance(provider, DashScopeQwenVision)
+
+
+def test_dashscope_vision_describe_without_key_fails_fast(monkeypatch) -> None:
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    from llm.dashscope_vision import DashScopeQwenVision
+
+    p = DashScopeQwenVision(_dashscope_vision_settings())
+    with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
+        asyncio_run(p.describe, image_bytes=b"\x89PNG\r\n\x1a\n fake")
+
+
+def test_dashscope_vision_sends_openai_image_url_and_parses(monkeypatch) -> None:
+    """OpenAI 兼容：content 带 image_url(data URI) + 文本；从 choices 解析回 text。"""
+    import llm.dashscope_vision as dv
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-fake-for-test")
+    fake = _FakeChatClient()
+    monkeypatch.setattr(dv.httpx, "AsyncClient", lambda **kw: fake)
+
+    p = dv.DashScopeQwenVision(_dashscope_vision_settings())
+    png = b"\x89PNG\r\n\x1a\n" + b"fake-payload"
+    ex = asyncio_run(p.describe, image_bytes=png)
+
+    assert ex.text == "想要一台拍照好的旗舰直屏手机"
+    assert p.calls == 1
+    (url, headers, payload), = fake.sent
+    assert url.endswith("/chat/completions")
+    assert headers["Authorization"] == "Bearer sk-fake-for-test"
+    assert payload["model"] == "qwen-vl-max"
+    content = payload["messages"][0]["content"]
+    assert content[0]["type"] == "image_url"
+    assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert content[1]["type"] == "text"

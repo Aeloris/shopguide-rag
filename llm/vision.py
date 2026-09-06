@@ -41,11 +41,17 @@ class MockVision:
 
 
 def get_vision_provider(settings: Settings) -> VisionProvider:
-    """按 config.vision.provider 产出实现：mock | anthropic（Claude 视觉，需 key）。"""
+    """按 config.vision.provider 产出实现：mock | anthropic | dashscope(Qwen-VL)。"""
     if settings.vision.provider == "mock":
         return MockVision(settings)
     if settings.vision.provider == "anthropic":
         from llm.anthropic import AnthropicVision  # 惰性导入避免 llm 层循环依赖
 
         return AnthropicVision(settings)
-    raise ValueError(f"未知 vision.provider：{settings.vision.provider}（可选 mock|anthropic）")
+    if settings.vision.provider == "dashscope":
+        from llm.dashscope_vision import DashScopeQwenVision
+
+        return DashScopeQwenVision(settings)
+    raise ValueError(
+        f"未知 vision.provider：{settings.vision.provider}（可选 mock|anthropic|dashscope）"
+    )

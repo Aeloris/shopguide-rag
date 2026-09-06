@@ -32,13 +32,14 @@
 | 会话存储 | InMemory / File | Postgres 16 JSONB（✅） | — |
 | 缓存 | off（NullCache） | Redis 7（✅） | — |
 | LLM 决定器 | MockDecision（确定性规则） | — | ✅ 真决定器：Anthropic 兼容 Messages（端点/模型可配；演示端点=DeepSeek `deepseek-chat`） |
-| 视觉 | MockVision（fixture 固定返回） | — | 待带视觉端点/官方 Claude 或 Qwen-VL（AnthropicVision 已实现，`vision.provider=anthropic` 即接；Qwen-VL 需加 OpenAI 兼容分支） |
+| 视觉 | MockVision（fixture 固定返回） | — | ✅ 真视觉 Qwen-VL（`provider=dashscope`，OpenAI 兼容，`llm/dashscope_vision.py`；连通实测通过，真商品图 e2e 待补） |
 | Embedding | MockEmbedding（确定性伪向量） | — | ✅ 真语义向量 DashScope `text-embedding-v3`（Dense 路，qdrant_server 真向量集合；含单请求≤10 分批） |
 
 切换点都收敛在工厂：向量库 `vector_factory.build_store`（`vector_db.provider`）、会话
-`get_session_store`、缓存 `get_cache`。**config.dev.yaml 仍全 mock（词法召回、不宣称语义）**；
-live 把 LLM 决定器与 Embedding 切真后，语义上限由**独立语义量表**（evals/run_semantic.py，
-真/伪向量对照）实测，不把 mock 数字搬到真服务宣称、也不并入离线门禁。
+`get_session_store`、缓存 `get_cache`、视觉 `get_vision_provider`。**config.dev.yaml 仍全 mock
+（词法召回、不宣称语义）**；live 把 LLM 决定器 / Embedding / 视觉（Qwen-VL）切真后，语义上限由
+**独立语义量表**（evals/run_semantic.py，真/伪向量对照）实测，不把 mock 数字搬到真服务宣称、
+也不并入离线门禁。
 
 ## 关键取舍（面试可展开）
 
@@ -75,8 +76,11 @@ live 把 LLM 决定器与 Embedding 切真后，语义上限由**独立语义量
       LLM —— Anthropic 兼容 Messages API（httpx 直连，端点/模型全可配）。实测 `deepseek-chat`
       正确选 compare/filter/final；预算对话 e2e 召回 redmi-k70(≤3000) 且真调 filter 工具；
       交易问题仍在问 LLM 前被代码硬规则拦截（refuse=trade，0 工具轮）
-- [ ] 3b. 真视觉：AnthropicVision 就绪（等带视觉的兼容端点/官方 key）；另一路径＝同一把
-      DashScope key 走 Qwen-VL（OpenAI 兼容视觉，需给 vision 工厂加一个兼容分支 + 真图冒烟）
+- [x] 3b. 真视觉已接 Qwen-VL：`llm/dashscope_vision.py`（OpenAI 兼容 /chat/completions，图片
+      base64 data-URI）+ vision 工厂 `dashscope` 分支 + `config.live.yaml`（`qwen-vl-max`）。
+      连通性实测通过（鉴权/载荷/解析）；对纯色空图模型诚实拒识（"无具体商品信息"，不幻觉）。
+      真商品图 → 检索的 e2e 冒烟待提供真实产品照片后补录（AnthropicVision 同就绪，切官方
+      Claude 只需 provider 改回 anthropic）
 - [x] 3c. 真 embedding DashScope：`embedding.provider=dashscope` 切 text-embedding-v3，
       qdrant_server 集合全量重建为真向量；真联调暴露并修复"单请求≤10 条分批"边界（补回归测试）
 - [x] 4. 语义量表已开（evals/run_semantic.py，隔离 Dense 语义路、真/伪向量对照）：
