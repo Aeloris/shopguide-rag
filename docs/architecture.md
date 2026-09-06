@@ -82,8 +82,9 @@
       模型诚实拒识（"无具体商品信息"，不幻觉）。**真实照片 e2e 已录**：用户实拍柠檬青柠洗洁精
       商品宣传图（AVIF，3C 域外）→ Qwen-VL 诚实抽出"洗洁精" → 域外门禁判店外无匹配 →
       Agent `no_match` 拒答（不再凑数推 3C）。该图曝光并修复了"检索无相关度地板"缺陷（见 3d）。
-      域内真实商品图的正例 e2e 仍待一张手机/笔记本照片后补录（AnthropicVision 同就绪，切官方
-      Claude 只需 provider 改回 anthropic）
+      **域内正例 e2e 已录**：一张紫色 iPhone 手机商品图（AVIF）→ Qwen-VL 抽出"紫色iPhone手机"
+      → 检索召回 top-1=`iphone-15`（图里机型），其余候选同品类、无跨品类幻觉；门禁不误伤域内图
+      （AnthropicVision 同就绪，切官方 Claude 只需 provider 改回 anthropic）
 - [x] 3c. 真 embedding DashScope：`embedding.provider=dashscope` 切 text-embedding-v3，
       qdrant_server 集合全量重建为真向量；真联调暴露并修复"单请求≤10 条分批"边界（补回归测试）
 - [x] 4. 语义量表已开（evals/run_semantic.py，隔离 Dense 语义路、真/伪向量对照）：
