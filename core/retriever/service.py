@@ -31,6 +31,46 @@ def _snippet_for(text: str, query: str, limit: int = 160) -> str:
     return compact if len(compact) <= limit else compact[:limit] + "…"
 
 
+# ---------------- 域外门禁（真商品图 e2e 曝光：检索无相关度地板 → 域外 query 也硬推 3C）-----
+#
+# 判定：问句与库内商品**零词法重叠**（len>=2 的 token：CJK 双字 / 整段型号）且**顶配向量分低于
+# 地板** → 用户要的东西这家店根本不卖（洗洁精/抽纸…）→ 直接判无匹配，不给 5 个凑数的 3C。
+# 词法零重叠是主信号（对封闭目录稳定、embedding 无关）；向量分是真 embedding 时的语义兜底——
+# 放行"零词面但语义强、实属店内"的问句，避免真向量下误拒。mock 向量无语义，离线靠词法零重叠撑住。
+# 诚实边界（README 同述）：机械键盘/游戏耳机/显示器等"外设配件"与库内笔记本共享规格词
+# （键盘/散热/屏），词法重叠判定认为它们在语域内 → 不会被本门禁拦截 —— 真店靠"库存品类"判定，
+# 属下一增量，此处不虚标。
+
+
+def _catalog_vocab(doc_texts: list[str]) -> set[str]:
+    """语料词表：所有 doc 中 len>=2 的检索 token（CJK 双字 / 整段英数型号）。"""
+    vocab: set[str] = set()
+    for text in doc_texts:
+        for t in tokenize(text):
+            if len(t) >= 2:
+                vocab.add(t)
+    return vocab
+
+
+def has_catalog_overlap(query: str, vocab: set[str]) -> bool:
+    """问句与语料共享任一 len>=2 token（品类/规格词面可达）→ 属店内语域候选。"""
+    for t in tokenize(query):
+        if len(t) >= 2 and t in vocab:
+            return True
+    return False
+
+
+def is_out_of_catalog(
+    query: str, doc_texts: list[str], top_dense_score: float, dense_floor: float
+) -> bool:
+    """真·域外（本店不卖）判定；空库不参与（空结果本就由上层处理）。"""
+    if not doc_texts:
+        return False
+    if has_catalog_overlap(query, _catalog_vocab(doc_texts)):
+        return False
+    return top_dense_score < dense_floor
+
+
 class Retriever:
     def __init__(
         self,
@@ -47,6 +87,7 @@ class Retriever:
         self._rrf_k = r.rrf_k
         self._rerank_top_n = r.rerank_top_n
         self._final_top_n = r.final_top_n
+        self._dense_floor = r.dense_match_floor
         from core.retriever.rerank import MockReranker
 
         self._reranker = MockReranker(top_n=r.rerank_top_n)
@@ -71,6 +112,11 @@ class Retriever:
         # 1) Dense 路
         q_vec = (await self._embedding.embed([query]))[0]
         dense_hits = self._store.search(q_vec, top_k=self._dense_top_k)
+        # 域外门禁：零词法重叠 + 顶配向量分 < 地板 → 本店不卖这类商品 → 无匹配（不给凑数 3C）
+        doc_texts = [d["text"] for d in docs]
+        top_dense = dense_hits[0]["_score"] if dense_hits else 0.0
+        if is_out_of_catalog(query, doc_texts, top_dense, self._dense_floor):
+            return []
         dense_ranked = [pid_to_idx[h["product_id"]] for h in dense_hits if h["product_id"] in pid_to_idx]
 
         # 2) BM25 路

@@ -12,7 +12,7 @@
 - 评测：gold 检索集 + 对抗不可答集 → 门禁退出码（**诚实口径，见下**）
 
 **进度**：
-- 阶段 A（离线底座）完成：`uv run pytest` **86 全绿**、`uv run python -m evals.run` 门禁全 PASS，
+- 阶段 A（离线底座）完成：`uv run pytest` **97 全绿**、`uv run python -m evals.run` 门禁全 PASS，
   无 Docker、无任何 API key 即可复现。
 - 阶段 B（Docker 真服务**数据平面**）落地：Postgres 16 JSONB 会话 + Redis 缓存 + Qdrant server 检索，
   集成测试 4 条在真容器上全绿（见"真服务（Docker）"）。
@@ -28,7 +28,7 @@
 
 ```bash
 uv sync                    # 安装依赖（含 langgraph）
-uv run pytest              # 86 tests 全绿（离线确定性；集成测试无容器自动跳过）
+uv run pytest              # 97 tests 全绿（离线确定性；集成测试无容器自动跳过）
 uv run python -m evals.run # 评测门禁：PASS 退出码 0，报告在 data/eval/eval_report.md
 uv run uvicorn app.main:app --port 8000   # 起 API（离线即可）
 ```
@@ -116,10 +116,27 @@ Dense 语义路（换 embedding 真正影响的那条路，13 SKU 改写问法�
 ### 真视觉（Qwen-VL，live，3b 已接）
 
 `vision.provider=dashscope`（同一把 `DASHSCOPE_API_KEY`，OpenAI 兼容 `/chat/completions`）：
-`llm/dashscope_vision.py` 把图片 base64 data-URI 发给 Qwen-VL，抽一句"用户要找的商品需求"并入
-检索 query。连通性已实测（含鉴权/载荷/解析）：对**纯色空图模型诚实拒识**（输出"无具体商品信息、
-无法识别数码商品需求"，不幻觉商品）。"真实商品图 → 检索"的 e2e 冒烟待提供一张真实产品照片后补录
+`llm/dashscope_vision.py` 把图片 base64 data-URI 发给 Qwen-VL（支持 png/jpeg/webp/avif/heic，
+`image/avif` 实测被端点接受），抽一句"用户要找的商品需求"并入检索 query。连通性已实测
+（鉴权/载荷/解析/AVIF）：对**纯色空图模型诚实拒识**（输出"无具体商品信息、无法识别数码商品
+需求"，不幻觉商品）。
+
+**真实照片 e2e（用户实拍商品图走完整链路）**：跑了一张柠檬青柠洗洁精的商品宣传图（AVIF，
+**3C 域外**）→ Qwen-VL 诚实抽出"洗洁精"需求 → 检索判**店外无匹配** → Agent `no_match` 拒答
+（`answerable=False`），不再凑数推荐 3C。这张域外图恰好暴露并修复了"检索无相关度地板"的缺陷
+（见下"域外门禁"）。域内（13 SKU 内）真实商品图的正例 e2e 仍待补一张手机/笔记本照片后录
 （见 [docs/architecture.md](docs/architecture.md) Roadmap 3b）。
+
+### 域外门禁（no_match 拒答落地，live/offline 同逻辑）
+
+真商品图 e2e 曝光：`search_products` 原来**无相关度地板** —— 域外 query（洗洁精/抽纸…）也会
+凑数返回 top-5 个 3C，`candidates` 永不为空，声明里的 `no_match` 拒答实际不可达。修复（
+`core/retriever/service.py` + `retrieval.dense_match_floor`）：问句与库内商品**零词法重叠**
+（len≥2 token：CJK 双字/整段型号）**且** 顶配向量分低于门禁阈值 → 判"店外无匹配"，检索返空 →
+Agent 走 `no_match` 拒答。**诚实边界**：机械键盘/游戏耳机/显示器等"外设配件"与库内笔记本共享
+规格词（键盘/散热/屏）→ 词法判定视其语域内，不会被本门禁拦截 —— 真店靠"库存品类"判定，
+属下一增量，此处不虚标。回归见 `tests/test_retriever_ood_gate.py`（洗洁精/洗发水/抽纸→拒答，
+域内改写问法不误伤，离线门禁 Recall@5 不回退）。
 
 ## 评测结果（本评测集口径，非能力宣称）
 
@@ -155,7 +172,7 @@ evals/        gold 检索集 + 对抗集 + 检索/Agent harness + run.py 门禁 
 fixtures/     catalog/products.json(13 SKU) + vision/sample.json
 scripts/      make_catalog.py（确定性生成种子）/ smoke_core.py
 deploy/       docker-compose.yml(postgres16/redis7/qdrant) + .env.docker
-tests/        86 离线确定性测试 + 4 Docker 集成测试（无容器自动跳过）
+tests/        97 离线确定性测试 + 4 Docker 集成测试（无容器自动跳过）
 docs/         架构 / 检索 / Agent / 评测 四篇
 ```
 

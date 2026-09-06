@@ -237,3 +237,14 @@ def test_dashscope_vision_sends_openai_image_url_and_parses(monkeypatch) -> None
     assert content[0]["type"] == "image_url"
     assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
     assert content[1]["type"] == "text"
+
+
+def test_guess_image_mime_iso_bmff_avif_heic() -> None:
+    """ISO-BMFF（截图常见 avif/heic，ftyp@4 品牌@8）不被误判为 png。"""
+    from llm.dashscope_vision import _guess_image_mime
+
+    assert _guess_image_mime(b"\x00\x00\x00\x20ftypavif\x00\x00\x00\x00" + b"\x00" * 32) == "image/avif"
+    assert _guess_image_mime(b"\x00\x00\x00\x20ftypavis\x00\x00\x00\x00" + b"\x00" * 32) == "image/avif"
+    assert _guess_image_mime(b"\x00\x00\x00\x20ftypheic\x00\x00\x00\x00" + b"\x00" * 32) == "image/heic"
+    # 普通 png 仍走原路径（回退不被 ftyp 探测误伤）
+    assert _guess_image_mime(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32) == "image/png"

@@ -34,6 +34,13 @@ def _guess_image_mime(data: bytes) -> str:
         return "image/jpeg"
     if data[:12] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
+    # ISO-BMFF 家族：ftyp 在 offset 4，品牌在 offset 8（AVIF/HEIC 截图常见，勿误判 png）
+    if data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in (b"avif", b"avis"):
+            return "image/avif"
+        if brand[:4] in (b"heic", b"heix", b"hevc", b"heim", b"heis"):
+            return "image/heic"
     return "image/png"  # 缺省按 png 发（OpenAI 兼容端点非识别格式走服务端报错）
 
 

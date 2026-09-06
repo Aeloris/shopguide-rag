@@ -77,12 +77,23 @@
       正确选 compare/filter/final；预算对话 e2e 召回 redmi-k70(≤3000) 且真调 filter 工具；
       交易问题仍在问 LLM 前被代码硬规则拦截（refuse=trade，0 工具轮）
 - [x] 3b. 真视觉已接 Qwen-VL：`llm/dashscope_vision.py`（OpenAI 兼容 /chat/completions，图片
-      base64 data-URI）+ vision 工厂 `dashscope` 分支 + `config.live.yaml`（`qwen-vl-max`）。
-      连通性实测通过（鉴权/载荷/解析）；对纯色空图模型诚实拒识（"无具体商品信息"，不幻觉）。
-      真商品图 → 检索的 e2e 冒烟待提供真实产品照片后补录（AnthropicVision 同就绪，切官方
+      base64 data-URI；支持 png/jpeg/webp/**avif**/heic）+ vision 工厂 `dashscope` 分支 +
+      `config.live.yaml`（`qwen-vl-max`）。连通性实测通过（鉴权/载荷/解析/AVIF）；对纯色空图
+      模型诚实拒识（"无具体商品信息"，不幻觉）。**真实照片 e2e 已录**：用户实拍柠檬青柠洗洁精
+      商品宣传图（AVIF，3C 域外）→ Qwen-VL 诚实抽出"洗洁精" → 域外门禁判店外无匹配 →
+      Agent `no_match` 拒答（不再凑数推 3C）。该图曝光并修复了"检索无相关度地板"缺陷（见 3d）。
+      域内真实商品图的正例 e2e 仍待一张手机/笔记本照片后补录（AnthropicVision 同就绪，切官方
       Claude 只需 provider 改回 anthropic）
 - [x] 3c. 真 embedding DashScope：`embedding.provider=dashscope` 切 text-embedding-v3，
       qdrant_server 集合全量重建为真向量；真联调暴露并修复"单请求≤10 条分批"边界（补回归测试）
 - [x] 4. 语义量表已开（evals/run_semantic.py，隔离 Dense 语义路、真/伪向量对照）：
       text-embedding-v3 Recall@5=1.000/MRR@5=0.949 vs mock 伪向量 0.846/0.531（13 SKU top-5）
       —— 报告 data/eval/eval_report.semantic.md；mock 数值不迁移到真服务宣称
+- [x] 5. **域外门禁**（真商品图 e2e 曝光缺陷的修复）：检索原来无相关度地板，域外 query 也会
+      凑数返回 top-5 个 3C（`candidates` 永不为空 → `no_match` 拒答不可达）。修复：问句与库内
+      商品零词法重叠（len≥2 token）且 顶配向量分 < `retrieval.dense_match_floor`(0.45) →
+      判店外无匹配 → 检索返空 → Agent `no_match` 拒答。词法零重叠是主信号（对封闭目录稳定、
+      embedding 无关）；向量分是真 embedding 时的语义兜底（防"零词面但语义强、实属店内"误拒）。
+      离线门禁 Recall@5=1.000 不回退；回归 `tests/test_retriever_ood_gate.py`。
+      **诚实边界**：机械键盘/游戏耳机/显示器等"外设配件"与库内笔记本共享规格词（键盘/散热/屏）
+      → 不被本门禁拦截 —— 真店靠"库存品类"判定，属下一增量。

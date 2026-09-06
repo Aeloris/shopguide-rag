@@ -52,6 +52,7 @@ retrieval:
   rrf_k: 60
   rerank_top_n: 8         # 融合后精排保留数
   final_top_n: 5          # 返回给 Agent 的产品数（按 product_id 去重后）
+  dense_match_floor: 0.45 # 域外门禁：问句与语料零词法重叠 且 顶配向量分<此值 → 判"店外无匹配"
 
 agent:
   max_tool_rounds: 3      # 工具调用有界轮数（防失控，面试可讲）

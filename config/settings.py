@@ -105,6 +105,10 @@ class RetrievalConfig(BaseModel):
     rrf_k: int = 60
     rerank_top_n: int = 8
     final_top_n: int = 5
+    # 域外门禁：问句与语料零词法重叠 且 顶配向量分低于此值 → 判"店外无匹配"（见 retriever/service.py）
+    # 语义：词法零重叠是主信号（本店不卖这类商品）；向量分是真 embedding 时的语义兜底——
+    # 避免"零词面但语义强、实属店内"的问句被误拒。mock 向量无语义，离线主要靠词法零重叠。
+    dense_match_floor: float = 0.45
 
 
 class AgentConfig(BaseModel):
