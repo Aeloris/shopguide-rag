@@ -12,7 +12,7 @@
 - 评测：gold 检索集 + 对抗不可答集 → 门禁退出码（**诚实口径，见下**）
 
 **进度**：
-- 阶段 A（离线底座）完成：`uv run pytest` **97 全绿**、`uv run python -m evals.run` 门禁全 PASS，
+- 阶段 A（离线底座）完成：`uv run pytest` **101 全绿**、`uv run python -m evals.run` 门禁全 PASS，
   无 Docker、无任何 API key 即可复现。
 - 阶段 B（Docker 真服务**数据平面**）落地：Postgres 16 JSONB 会话 + Redis 缓存 + Qdrant server 检索，
   集成测试 4 条在真容器上全绿（见"真服务（Docker）"）。
@@ -28,7 +28,7 @@
 
 ```bash
 uv sync                    # 安装依赖（含 langgraph）
-uv run pytest              # 97 tests 全绿（离线确定性；集成测试无容器自动跳过）
+uv run pytest              # 101 tests 全绿（离线确定性；集成测试无容器自动跳过）
 uv run python -m evals.run # 评测门禁：PASS 退出码 0，报告在 data/eval/eval_report.md
 uv run uvicorn app.main:app --port 8000   # 起 API（离线即可）
 ```
@@ -126,8 +126,10 @@ Dense 语义路（换 embedding 真正影响的那条路，13 SKU 改写问法�
   → 域外门禁判**店外无匹配** → Agent `no_match` 拒答（`answerable=False`），不再凑数推荐 3C
   （该图暴露并修复了"检索无相关度地板"缺陷，见下"域外门禁"）。
 - **域内正例**：一张紫色 iPhone 手机商品图（AVIF）→ Qwen-VL 抽出"紫色iPhone手机，追求时尚外观
-  与高性能体验" → 检索召回 **top-1 = `iphone-15` Apple iPhone 15**（即图里的机型），其余候选
-  同品类（vivo X100/小米14/Redmi K70/一加12）无跨品类幻觉；域外门禁不误伤域内图。
+  与高性能体验" → 检索召回 **top-1 = `iphone-15`**（目录在售的唯一 iPhone），其余候选同品类无跨
+  品类幻觉；域外门禁不误伤域内图。**诚实备注**：该图背面无型号字样，Qwen-VL 判"15/15 Plus、
+  无法完全确定"，仓库不把 iphone-15 说成"图上这台必是 15"的强断言；若该机型实为目录外的代际
+  （如 iPhone 17），属下"库外数字代际门禁"场景、以用户文字点名判定（图上无型号字样时不虚构）。
 
 ### 域外门禁（no_match 拒答落地，live/offline 同逻辑）
 
@@ -139,6 +141,17 @@ Agent 走 `no_match` 拒答。**诚实边界**：机械键盘/游戏耳机/显�
 规格词（键盘/散热/屏）→ 词法判定视其语域内，不会被本门禁拦截 —— 真店靠"库存品类"判定，
 属下一增量，此处不虚标。回归见 `tests/test_retriever_ood_gate.py`（洗洁精/洗发水/抽纸→拒答，
 域内改写问法不误伤，离线门禁 Recall@5 不回退）。
+
+### 库外数字代际门禁（文字点名判定，live/offline 同逻辑）
+
+真机 iPhone 17 图 e2e 曝光第二类"冒充命中"：用户图/文字点名 **iPhone 17**，而目录 iPhone 只有
+15 —— 修前会拿同品牌相近代 `iphone-15` 冒充命中返回。修复（`core/agent/decision.py`
+`find_out_of_stock_phone`，Mock 与 Anthropic 决定器都**先于模型**走代码规则）：问句点名了
+"在售手机系列之外的数字代际"（iPhone 17 / 小米 15 / Mate 70 / Redmi K80 / vivo X200 /
+OnePlus 13，任一越库即拒）→ `no_match` 拒答，理由点明该型号与在售代际（在库代际从目录
+自校准，不硬编码具体数字）。**诚实边界**：只覆盖 6 个"数字代际清晰"的在售手机系列；
+笔记本/平板（M3 / X1 Carbon / Pro16 / Air5 / MatePad 13.2）无稳定数字代际规则，未纳入
+（仍按最近在售）。回归见 `tests/test_agent_out_of_stock.py`。
 
 ## 评测结果（本评测集口径，非能力宣称）
 
@@ -174,7 +187,7 @@ evals/        gold 检索集 + 对抗集 + 检索/Agent harness + run.py 门禁 
 fixtures/     catalog/products.json(13 SKU) + vision/sample.json
 scripts/      make_catalog.py（确定性生成种子）/ smoke_core.py
 deploy/       docker-compose.yml(postgres16/redis7/qdrant) + .env.docker
-tests/        97 离线确定性测试 + 4 Docker 集成测试（无容器自动跳过）
+tests/        101 离线确定性测试 + 4 Docker 集成测试（无容器自动跳过）
 docs/         架构 / 检索 / Agent / 评测 四篇
 ```
 

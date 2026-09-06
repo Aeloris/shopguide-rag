@@ -16,10 +16,26 @@ AgentDecision.kind：
 """
 from __future__ import annotations
 
-from typing import Any
+import re
+from typing import Any, Callable
 
 from core.agent.schemas import AgentDecision, RefusalKind
 from core.agent.tools import _category_from_query, parse_budget_cny
+
+# ---- 库外数字代际型号门禁（真机 iPhone 17 图 e2e 曝光：库里 iPhone 只有 15，点名 17 却拿 15 冒充命中）----
+# 语义：用户点名了"在售系列之外的数字代际"（iPhone 17 / 小米 15 / Mate 70 / Redmi K80 / vivo X200 /
+# OnePlus 13）→ 库内没有该型号 → no_match 拒答，不拿同品牌相近代冒充命中。
+# 库内代际从目录自校准（按各家族正则命中 phone 产品的 name/model），不硬编码具体数字。
+# 诚实边界：只覆盖 6 个"数字代际清晰"的在售手机系列；笔记本/平板命名（M3 / X1 Carbon / Pro16 /
+# Air5 / MatePad 13.2）无稳定数字代际规则，未纳入 → 仍按最近在售（README 已述）。
+_PHONE_MODEL: list[tuple[str, Callable[[int], str], re.Pattern]] = [
+    ("iPhone", lambda n: f"iPhone {n}", re.compile(r"(?:iphone|苹果)\s*(\d{2,3})")),
+    ("小米", lambda n: f"小米 {n}", re.compile(r"(?:xiaomi|小米)\s*(\d{1,3})")),
+    ("Redmi", lambda n: f"Redmi K{n}", re.compile(r"(?:redmi|红米)\s*(?:k)?(\d{1,3})")),
+    ("Mate", lambda n: f"华为 Mate {n}", re.compile(r"mate\s*(\d{1,3})")),
+    ("vivo X", lambda n: f"vivo X{n}", re.compile(r"vivo\s*x(\d{1,3})")),
+    ("OnePlus", lambda n: f"OnePlus {n}", re.compile(r"(?:oneplus|一加)\s*(\d{1,3})")),
+]
 
 # ---- 不可答硬规则（词面命中即拒绝；宁可转引导，不硬答/不瞎编）----
 _REFUSAL_RULES: list[tuple[RefusalKind, list[str]]] = [
@@ -70,6 +86,35 @@ def classify_refusal(text: str) -> tuple[RefusalKind | None, str]:
     return None, ""
 
 
+def find_out_of_stock_phone(catalog: Any, query: str) -> tuple[str | None, str]:
+    """问句点名了库里没有的数字代际型号 → 返回 (型号展示串, 拒答原因)；否则 (None, '')。
+
+    判定：命中任一"在售手机系列"型号正则取到数字代际 N，且 N ∉ 该系列在库代际（从目录
+    phone 产品的 name 自校准）→ 库外型号。多条命中任一越库即拒（如 "iPhone 15 对比 iPhone 17"）。
+    """
+    q = query.lower()
+    hits: list[tuple[str, Callable[[int], str], int]] = []
+    for label, fmt, pat in _PHONE_MODEL:
+        for m in pat.finditer(q):
+            hits.append((label, fmt, int(m.group(1))))
+    if not hits:
+        return None, ""
+    allowed: dict[str, set[int]] = {label: set() for label, _, _ in _PHONE_MODEL}
+    for p in getattr(catalog, "products", []):
+        if getattr(p, "category", None) != "phone":
+            continue
+        name = (p.name or "").lower()
+        for label, _, pat in _PHONE_MODEL:
+            m = pat.search(name)
+            if m:
+                allowed[label].add(int(m.group(1)))
+    for label, fmt, n in hits:
+        if n not in allowed[label]:
+            instock = "、".join(sorted(fmt(g) for g in allowed[label])) or "无"
+            return fmt(n), f"库内没有在售 {fmt(n)}；在售该系列代际：{instock}（不拿相近型号冒充命中）"
+    return None, ""
+
+
 def _has_compare_intent(text: str) -> bool:
     return any(w in text for w in _COMPARE_WORDS)
 
@@ -96,6 +141,11 @@ class MockDecision:
         kind, hint = classify_refusal(query)
         if kind:
             return AgentDecision(kind="refuse", reason=hint, refusal_kind=kind)
+
+        # 1b) 点名了库里没有的数字代际型号（iPhone 17 / 小米 15 / Mate 70…）→ no_match，不冒充命中
+        _disp, reason = find_out_of_stock_phone(self._catalog, query)
+        if reason:
+            return AgentDecision(kind="refuse", reason=reason, refusal_kind="no_match")
 
         done = set(done_tools)
         if "search_products" not in done:

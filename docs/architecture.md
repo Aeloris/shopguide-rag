@@ -83,8 +83,11 @@
       商品宣传图（AVIF，3C 域外）→ Qwen-VL 诚实抽出"洗洁精" → 域外门禁判店外无匹配 →
       Agent `no_match` 拒答（不再凑数推 3C）。该图曝光并修复了"检索无相关度地板"缺陷（见 3d）。
       **域内正例 e2e 已录**：一张紫色 iPhone 手机商品图（AVIF）→ Qwen-VL 抽出"紫色iPhone手机"
-      → 检索召回 top-1=`iphone-15`（图里机型），其余候选同品类、无跨品类幻觉；门禁不误伤域内图
-      （AnthropicVision 同就绪，切官方 Claude 只需 provider 改回 anthropic）
+      → 检索召回 top-1=`iphone-15`（目录在售的唯一 iPhone），其余候选同品类、无跨品类幻觉；
+      门禁不误伤域内图（AnthropicVision 同就绪，切官方 Claude 只需 provider 改回 anthropic）。
+      **诚实备注**：该图背面无型号字样，Qwen-VL 判"15/15 Plus、无法完全确定"，不把 iphone-15
+      说成"图上这台必是 15"的强断言；用户随后确认真机为目录外代际 **iPhone 17** → 属 item 6 的
+      "库外数字代际门禁"场景（文字点名才判定，图上无型号字样时不虚构）
 - [x] 3c. 真 embedding DashScope：`embedding.provider=dashscope` 切 text-embedding-v3，
       qdrant_server 集合全量重建为真向量；真联调暴露并修复"单请求≤10 条分批"边界（补回归测试）
 - [x] 4. 语义量表已开（evals/run_semantic.py，隔离 Dense 语义路、真/伪向量对照）：
@@ -98,3 +101,11 @@
       离线门禁 Recall@5=1.000 不回退；回归 `tests/test_retriever_ood_gate.py`。
       **诚实边界**：机械键盘/游戏耳机/显示器等"外设配件"与库内笔记本共享规格词（键盘/散热/屏）
       → 不被本门禁拦截 —— 真店靠"库存品类"判定，属下一增量。
+- [x] 6. **库外数字代际门禁**（真机 iPhone 17 图 e2e 曝光：库里 iPhone 只有 15，文字点名"iPhone 17"
+      却拿同品牌相近代 iphone-15 **冒充命中**返回）。修复（`core/agent/decision.py::find_out_of_stock_phone`，
+      Mock 与 Anthropic 决定器都在模型前走代码规则）：问句点名"在售手机系列之外的数字代际"
+      （iPhone 17/小米 15/Mate 70/Redmi K80/vivo X200/OnePlus 13 任一命中越库）→ `no_match` 拒答、
+      理由点明该型号与在售代际（自校准不硬编码）；"iPhone 15 vs iPhone 17"多条命中任一越库即拒。
+      离线门禁全绿不回退；回归 `tests/test_agent_out_of_stock.py`。
+      **诚实边界**：仅覆盖 6 个数字代际清晰的在售手机系列；笔记本/平板（M3/X1 Carbon/Pro16/Air5/
+      MatePad 13.2）无稳定数字代际规则，不在本门禁内（仍按最近在售）。

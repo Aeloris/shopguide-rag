@@ -19,7 +19,7 @@ import os
 import httpx
 
 from config.settings import Settings
-from core.agent.decision import MockDecision, classify_refusal
+from core.agent.decision import MockDecision, classify_refusal, find_out_of_stock_phone
 from core.agent.schemas import AgentDecision
 from core.agent.tools import _category_from_query, parse_budget_cny
 from llm.vision import VisionExtraction
@@ -157,6 +157,11 @@ class AnthropicDecision:
         kind, hint = classify_refusal(query)
         if kind:
             return AgentDecision(kind="refuse", reason=hint, refusal_kind=kind)
+
+        # 1b) 点名库外数字代际型号（iPhone 17…）→ no_match，先于模型（代码规则）
+        _disp, reason = find_out_of_stock_phone(self._catalog, query)
+        if reason:
+            return AgentDecision(kind="refuse", reason=reason, refusal_kind="no_match")
 
         done = set(done_tools)
         ids = [c["product_id"] for c in candidates]
