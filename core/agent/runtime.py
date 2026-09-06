@@ -51,7 +51,25 @@ class AgentRuntime:
         emb = embedding or get_embedding_provider(s)
         await Ingester(store, emb).rebuild(catalog)
         retriever = Retriever(store, emb, s)
-        graph = build_graph(build_ctx(catalog, retriever, max_tool_rounds=s.agent.max_tool_rounds))
+
+        # 决定器：llm.provider=mock → 确定性规则；=anthropic → 真 Claude 选动作（回落规则）
+        if s.llm.provider == "anthropic":
+            from llm.anthropic import AnthropicDecision
+
+            decision = AnthropicDecision(catalog, s)
+        else:
+            from core.agent.decision import MockDecision
+
+            decision = MockDecision(catalog)
+
+        graph = build_graph(
+            build_ctx(
+                catalog,
+                retriever,
+                decision=decision,
+                max_tool_rounds=s.agent.max_tool_rounds,
+            )
+        )
         return cls(settings=s, catalog=catalog, retriever=retriever, graph=graph)
 
     async def ask(self, query: str, *, images: list[bytes] | None = None) -> AgentReply:

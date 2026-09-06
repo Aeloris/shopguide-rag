@@ -26,14 +26,14 @@
 **数据平面**（PG/Redis/Qdrant server，无 key 也能验）；最后等有真实 API key 再接 provider。
 同一套工厂，业务代码零改动：
 
-| 能力 | 离线默认（config.yaml） | 真服务数据平面（config.dev.yaml，✅ 已落地） | 真 key 接入（待） |
+| 能力 | 离线默认（config.yaml） | 真服务数据平面（config.dev.yaml，✅） | 真 LLM/视觉/embedding（config.live.yaml） |
 |---|---|---|---|
-| 向量库 | Qdrant `:memory:` / 本地 path | Qdrant server（compose，✅ 集成测试过） | — |
+| 向量库 | Qdrant `:memory:` / 本地 path | Qdrant server（✅ 集成测试过） | — |
 | 会话存储 | InMemory / File | Postgres 16 JSONB（✅） | — |
 | 缓存 | off（NullCache） | Redis 7（✅） | — |
-| Embedding | MockEmbedding（确定性伪向量） | — | DashScope / 本地 |
-| 视觉 | MockVision（fixture 固定返回） | — | Claude 视觉（anthropic） |
-| LLM 决定器 | MockDecision（确定性规则） | — | 同接口接 Claude |
+| LLM 决定器 | MockDecision（确定性规则） | — | ✅ 真决定器：Anthropic 兼容 Messages（端点/模型可配；演示端点=DeepSeek `deepseek-chat`） |
+| 视觉 | MockVision（fixture 固定返回） | — | 待带视觉端点/官方 Claude（AnthropicVision 已实现，`vision.provider=anthropic` 即接） |
+| Embedding | MockEmbedding（确定性伪向量） | — | 待 DASHSCOPE_API_KEY（DashScopeEmbedding 已实现，`embedding.provider=dashscope` 即接） |
 
 切换点都收敛在工厂：向量库 `vector_factory.build_store`（`vector_db.provider`）、会话
 `get_session_store`、缓存 `get_cache`。dev 缺真 key 的部分维持 mock —— 检索是词法召回、
@@ -66,5 +66,10 @@
 - [x] 2. Postgres JSONB SessionStore + Redis Cache + 向量切 qdrant server（`config.dev.yaml`
       / `.env.docker`）；集成测试 4 条在真服务上全绿：会话跨连接回读、Redis TTL 过期、
       qdrant server 检索召回、app 双轮对话落 PG + `/api/search` 走 Redis
-- [ ] 3. 真 LLM/视觉联调（Claude）+ 真 embedding —— 需真实 API key，未接前 dev 保持 mock
-- [ ] 4. 语义评测另开量表（mock 数值不迁移到真服务宣称）
+- [x] 3a. 真 LLM 决定器（`config.live.yaml`，`llm.provider=anthropic`）：LangGraph 调度走真实
+      LLM —— Anthropic 兼容 Messages API（httpx 直连，端点/模型全可配）。实测 `deepseek-chat`
+      正确选 compare/filter/final；预算对话 e2e 召回 redmi-k70(≤3000) 且真调 filter 工具；
+      交易问题仍在问 LLM 前被代码硬规则拦截（refuse=trade，0 工具轮）
+- [ ] 3b. 真视觉 Claude（AnthropicVision 就绪，待带视觉的兼容端点/官方 key）
+- [ ] 3c. 真 embedding DashScope（DashScopeEmbedding 就绪，待 DASHSCOPE_API_KEY）
+- [ ] 4. 语义评测另开量表（mock 数值不迁移到真服务宣称；真 embedding 接入后再开）

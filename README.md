@@ -12,11 +12,14 @@
 - 评测：gold 检索集 + 对抗不可答集 → 门禁退出码（**诚实口径，见下**）
 
 **进度**：
-- 阶段 A（离线底座）完成：`uv run pytest` **77 全绿**、`uv run python -m evals.run` 门禁全 PASS，
+- 阶段 A（离线底座）完成：`uv run pytest` **84 全绿**、`uv run python -m evals.run` 门禁全 PASS，
   无 Docker、无任何 API key 即可复现。
 - 阶段 B（Docker 真服务**数据平面**）落地：Postgres 16 JSONB 会话 + Redis 缓存 + Qdrant server 检索，
-  集成测试 4 条在真容器上全绿（见"真服务（Docker）"）。真 Claude 视觉/LLM 与真 embedding 需真实
-  API key，未接前 dev 模式保持 mock（诚实口径，取舍见 [docs/architecture.md](docs/architecture.md)）。
+  集成测试 4 条在真容器上全绿（见"真服务（Docker）"）。
+- 阶段 B（**真 LLM 决定器**，live）：LangGraph 调度走真实 LLM —— Anthropic 兼容 Messages API，
+  端点/模型全可配（本机演示端点=DeepSeek `deepseek-chat`）。**视觉与语义 embedding 未接**（当前端点
+  无图片能力、缺 DashScope key）→ 保持 mock，接入点已就绪（诚实口径，取舍见
+  [docs/architecture.md](docs/architecture.md)）。
 
 ---
 
@@ -24,7 +27,7 @@
 
 ```bash
 uv sync                    # 安装依赖（含 langgraph）
-uv run pytest              # 77 tests 全绿（离线确定性；集成测试无容器自动跳过）
+uv run pytest              # 84 tests 全绿（离线确定性；集成测试无容器自动跳过）
 uv run python -m evals.run # 评测门禁：PASS 退出码 0，报告在 data/eval/eval_report.md
 uv run uvicorn app.main:app --port 8000   # 起 API（离线即可）
 ```
@@ -77,6 +80,22 @@ SHOPGUIDE_DOCKER_INT=1 uv run pytest tests/test_integration_docker.py -q   # 4 p
 容器数据都在命名卷，落 Docker 数据根（本机已挪到 `D:\develop`，不占 C 盘）。
 停止：`docker compose down`（加 `-v` 连数据卷一起删）。
 
+### 真 LLM 决定器（live，可选）
+
+数据平面之上再切**真实 LLM** 做工具调度（`config/config.live.yaml`；需 `.env` 里
+`ANTHROPIC_API_KEY`，走中转再加 `ANTHROPIC_BASE_URL`）：
+
+```bash
+export SHOPGUIDE_CONFIG=config/config.live.yaml   # PowerShell: $env:SHOPGUIDE_CONFIG="..."
+uv run uvicorn app.main:app --port 8000
+```
+
+> **边界**：真 LLM 只决定"下一步调哪个工具"——不可答拒绝仍是代码硬规则、预算/比参仍是代码做，
+> grounding 由白名单构造保证；视觉/语义 embedding 未接时保持 mock（词法召回，不宣称语义）。
+> 本机演示端点=DeepSeek（`api.deepseek.com/anthropic`，模型 `deepseek-chat`）；切官方 Claude 只需
+> 去掉 `ANTHROPIC_BASE_URL` 并把 config 的 `llm.model` 改回 Claude 型号，视觉同理把
+> `vision.provider` 切 anthropic。
+
 ## 评测结果（本评测集口径，非能力宣称）
 
 离线 mock（MockEmbedding + Qdrant 内存 + 确定性规则 Agent）逐次回放：
@@ -110,7 +129,7 @@ evals/        gold 检索集 + 对抗集 + 检索/Agent harness + run.py 门禁
 fixtures/     catalog/products.json(13 SKU) + vision/sample.json
 scripts/      make_catalog.py（确定性生成种子）/ smoke_core.py
 deploy/       docker-compose.yml(postgres16/redis7/qdrant) + .env.docker
-tests/        77 离线确定性测试 + 4 Docker 集成测试（无容器自动跳过）
+tests/        84 离线确定性测试 + 4 Docker 集成测试（无容器自动跳过）
 docs/         架构 / 检索 / Agent / 评测 四篇
 ```
 

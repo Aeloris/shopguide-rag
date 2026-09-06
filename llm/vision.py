@@ -41,12 +41,11 @@ class MockVision:
 
 
 def get_vision_provider(settings: Settings) -> VisionProvider:
-    """按 config.vision.provider 产出实现；anthropic 未接入前构造即抛（fail fast）。"""
+    """按 config.vision.provider 产出实现：mock | anthropic（Claude 视觉，需 key）。"""
     if settings.vision.provider == "mock":
         return MockVision(settings)
     if settings.vision.provider == "anthropic":
-        raise NotImplementedError(
-            "vision.provider=anthropic 尚未接入：阶段 B 需实现 Claude 视觉调用并配 "
-            "ANTHROPIC_API_KEY。离线请保持 vision.provider=mock。"
-        )
+        from llm.anthropic import AnthropicVision  # 惰性导入避免 llm 层循环依赖
+
+        return AnthropicVision(settings)
     raise ValueError(f"未知 vision.provider：{settings.vision.provider}（可选 mock|anthropic）")

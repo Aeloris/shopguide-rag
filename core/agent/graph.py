@@ -183,10 +183,16 @@ def build_graph(ctx: NodeContext):
     return g.compile()
 
 
-def build_ctx(catalog: Catalog, retriever: Retriever, *, max_tool_rounds: int = 3) -> NodeContext:
+def build_ctx(
+    catalog: Catalog,
+    retriever: Retriever,
+    *,
+    decision: Any | None = None,
+    max_tool_rounds: int = 3,
+) -> NodeContext:
     tools = GuideTools(catalog, retriever)
     return NodeContext(
         tools=tools,
-        decision=MockDecision(catalog),
+        decision=decision if decision is not None else MockDecision(catalog),
         max_tool_rounds=max_tool_rounds,
     )

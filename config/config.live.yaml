@@ -1,0 +1,39 @@
+# ============ shopguide-rag live 覆盖配置（真服务数据平面 + 真 LLM 决定器）============
+# 用法：docker 容器在跑 + .env 有 ANTHROPIC_API_KEY（含可选 ANTHROPIC_BASE_URL）后：
+#   export SHOPGUIDE_CONFIG=config/config.live.yaml
+#   uv run uvicorn app.main:app --port 8000
+# 需要：ANTHROPIC_API_KEY + DATABASE_URL / REDIS_URL（见 .env.example 与 deploy/.env.docker）。
+#
+# 现状（诚实边界，README/docs 同步）：
+#   ✅ llm     真决定器 —— Anthropic 兼容 Messages API（httpx 直连）。端点/模型都走 env/config：
+#              默认端点 api.anthropic.com + 官方模型；设了 ANTHROPIC_BASE_URL 则走中转（本机演示
+#              = DeepSeek api.deepseek.com/anthropic，模型须用其名称如 deepseek-chat）。
+#   ⏳ vision  mock —— 当前端点(DeepSeek)无图片能力；有带视觉的兼容端点/官方 Claude key 后，
+#              把 vision.provider 改 anthropic 即接（AnthropicVision 已实现，协议层就绪）。
+#   ⏳ embedding mock —— 需 DASHSCOPE_API_KEY 才切 dashscope（DashScopeEmbedding 已实现；
+#              无 key 时检索是词法召回，不宣称语义）。
+# 真 LLM 只决定"下一步调哪个工具"：不可答拒绝仍是代码硬规则、预算/比参仍是代码做。
+mode: dev
+
+llm:
+  provider: anthropic
+  model: deepseek-chat   # 当前端点=DeepSeek 用其模型名；切官方 Claude 改回 claude-sonnet-5
+
+vision:
+  provider: mock         # anthropic 需带视觉的端点/官方 Claude key（未具备前 mock）
+
+embedding:
+  provider: mock         # dashscope 需 DASHSCOPE_API_KEY（未具备前 mock，词法召回）
+
+vector_db:
+  provider: qdrant_server
+  url: http://localhost:6333
+
+store:
+  provider: postgres
+  dsn_env: DATABASE_URL
+
+cache:
+  provider: redis
+  ttl_sec: 300
+  dsn_env: REDIS_URL

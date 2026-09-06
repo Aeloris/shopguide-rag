@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """Embedding 工厂：按 settings.embedding.provider 产出实现。
 
-离线默认 mock；dashscope 为阶段 B 预留（未接 key 启动即 fail-fast，不会默默降级）。
+离线默认 mock；dashscope 为真文本向量（text-embedding-v3，OpenAI 兼容 /embeddings），
+需 DASHSCOPE_API_KEY —— 无 key 构造即 fail-fast，不会默默降级。
 """
 from __future__ import annotations
+
+import os
+
+import httpx
 
 from config.settings import Settings, get_settings
 from core.embeddings.base import EmbeddingProvider
@@ -11,23 +16,57 @@ from core.embeddings.mock_embedding import MockEmbedding
 
 
 class DashScopeEmbedding:
-    """阶段 B 预留：真实文本向量（text-embedding-v3，需 DASHSCOPE_API_KEY）。
+    """真文本向量：阿里云百炼 text-embedding-v3（OpenAI 兼容接口）。
 
-    当前未接入 → 构造即抛，防止误以为已接真模型。
+    - 输出维度与 vector_db 集合一致（config.embedding.dimension，v3 默认 1024）；
+    - 同批 input 一次请求，返回序与输入序一致（data.index 对齐回填）；
+    - key 只从环境变量读，绝不落代码/配置。
     """
 
     dimension: int
 
-    def __init__(self, dimension: int = 1024, *, base_url: str = "", api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        dimension: int = 1024,
+        *,
+        model: str = "text-embedding-v3",
+        base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key: str | None = None,
+        timeout_sec: float = 60.0,
+    ) -> None:
         self.dimension = dimension
-        if not api_key:
+        self._model = model
+        self._base = (base_url or "").rstrip("/")
+        self._api_key = api_key
+        self._timeout = timeout_sec
+        if not self._api_key:
             raise RuntimeError(
-                "DashScopeEmbedding 尚未接入：阶段 B 需先实现真 embedding 调用并配置 "
-                "DASHSCOPE_API_KEY。离线请保持 embedding.provider=mock。"
+                "embedding.provider=dashscope 但环境变量 DASHSCOPE_API_KEY 未设置。\n"
+                "解决办法：复制 .env.example 为 .env 填入阿里云百炼 key；"
+                "或保持 embedding.provider=mock。"
             )
 
-    async def embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover
-        raise NotImplementedError
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        payload: dict = {"model": self._model, "input": texts, "encoding_format": "float"}
+        # text-embedding-v3 支持 dimensions≤1024 控制输出维；等于默认(1024)时省略即可
+        if 0 < self.dimension < 1024:
+            payload["dimensions"] = self.dimension
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await client.post(
+                f"{self._base}/embeddings", headers=headers, json=payload
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"DashScope embedding HTTP {resp.status_code}: {resp.text[:200]}"
+                )
+            data = resp.json().get("data", [])
+        ordered = [d["embedding"] for d in sorted(data, key=lambda d: d.get("index", 0))]
+        if len(ordered) != len(texts):
+            raise RuntimeError(
+                f"DashScope embedding 返回 {len(ordered)} 条，输入 {len(texts)} 条"
+            )
+        return ordered
 
 
 def get_embedding_provider(settings: Settings | None = None) -> EmbeddingProvider:
@@ -35,14 +74,12 @@ def get_embedding_provider(settings: Settings | None = None) -> EmbeddingProvide
     if s.embedding.provider == "mock":
         return MockEmbedding(dimension=s.embedding.dimension)
     if s.embedding.provider == "dashscope":
-        from config.settings import load_dotenv  # noqa: F401  # 已在上层加载
-
-        import os
-
         return DashScopeEmbedding(
             dimension=s.embedding.dimension,
+            model=s.embedding.model,
             base_url=s.embedding.base_url,
             api_key=os.getenv("DASHSCOPE_API_KEY"),
+            timeout_sec=s.llm.timeout_sec,
         )
     raise ValueError(f"未知 embedding.provider：{s.embedding.provider}（可选 mock|dashscope）")
 
