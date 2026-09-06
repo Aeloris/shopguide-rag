@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
-"""检索评测入口：离线构建管线 → 跑 gold 集 → 写 Markdown 报告 + 门禁退出码。
+"""全量评测入口：检索门禁 + Agent 门禁 → Markdown 报告 + 退出码。
 
 用法：uv run python -m evals.run
 - 报告写到 config.eval.output_dir/eval_report.md（默认 ./data/eval/eval_report.md）。
-- 门禁（config.yaml eval.thresholds）：Recall@K / MRR@K 均值低于阈值 → 退出码 1。
-  阈值是"离线 mock 实测回填的防回退基线"（见 README 诚实口径），不是能力宣称。
+- 离线 mock 确定性；config.yaml eval.thresholds 是实测回填的防回退基线（README 诚实口径）。
+
+评测块：
+  1) 检索：12 条 gold Q&A → Recall@K / MRR@K（召回是否把"该召回的"保住）
+  2) Agent：同批可答问法 → grounded_rate / bad_refusal_rate；对抗不可答集 → 拦截率
+任一指标低于阈值 → 退出码 1（防引擎回退）。
 """
 from __future__ import annotations
 
@@ -13,13 +17,12 @@ import sys
 from pathlib import Path
 
 from config.settings import Settings, get_settings
-from core.catalog.loader import load_catalog
-from core.embeddings import get_embedding_provider
-from core.ingest import Ingester
-from core.retriever import Retriever
-from core.vector_store import ProductVectorStore
-from evals.dataset import RETRIEVAL_CASES
+from core.agent import AgentRuntime
+from evals.agent_eval import AgentEvalReport, evaluate_agent
+from evals.dataset import RETRIEVAL_CASES, UNANSWERABLE_CASES
 from evals.retrieval_eval import RetrievalReport, evaluate_retriever
+
+UNANSWERABLE_REFUSAL_REQ = 1.0  # 对抗不可答必须全拦（代码硬规则，恒 1.0）
 
 
 def _force_utf8_streams() -> None:
@@ -32,83 +35,103 @@ def _force_utf8_streams() -> None:
                 pass
 
 
-async def _run_eval(s: Settings) -> RetrievalReport:
-    catalog = load_catalog(s)
-    store = ProductVectorStore(
-        collection="eval", dimension=s.embedding.dimension, path=":memory:"
-    )
-    emb = get_embedding_provider(s)  # mock（config.mode=offline 默认）
-    await Ingester(store, emb).rebuild(catalog)
-    retriever = Retriever(store, emb, s)
+def _fmt(x: float | None, nd: int = 3) -> str:
+    return "-" if x is None else f"{x:.{nd}f}"
+
+
+async def _eval_all(s: Settings) -> tuple[RetrievalReport, AgentEvalReport]:
+    rt = await AgentRuntime.build(s)  # 一次构建，检索/agent 共用
     t = s.eval.thresholds
-    return await evaluate_retriever(
-        retriever,
+    retrieval = await evaluate_retriever(
+        rt.retriever,
         RETRIEVAL_CASES,
         top_k=s.eval.top_k,
         recall_threshold=t.hybrid_recall_at_k,
         mrr_threshold=t.hybrid_mrr_at_k,
     )
+    agent = await evaluate_agent(
+        rt,
+        answerable_queries=[c.question for c in RETRIEVAL_CASES],
+        unanswerable_cases=UNANSWERABLE_CASES,
+    )
+    return retrieval, agent
 
 
-def _render_markdown(report: RetrievalReport, s: Settings) -> str:
-    rows = []
-    for i, c in enumerate(report.cases, start=1):
-        mark = "✅" if c.passed else "❌"
-        gold = "、".join(c.gold_product_ids)
-        hits = "、".join(c.hit_product_ids) if c.hit_product_ids else "（无命中）"
-        rows.append(
-            f"| {i} | {c.question} | {gold} | {hits} | {c.recall_at_k:.2f} | "
-            f"{c.mrr_at_k:.2f} | {mark} |"
-        )
+def _render_markdown(retrieval: RetrievalReport, agent: AgentEvalReport, s: Settings) -> str:
     t = s.eval.thresholds
-    ra = report.avg_recall_at_k
-    rm = report.avg_mrr_at_k
-    recall_line = (
-        f"{ra:.3f}" if ra is not None else "-"
-    )
-    mrr_line = f"{rm:.3f}" if rm is not None else "-"
-    return "\n".join(
-        [
-            "# 检索评测报告（离线 mock 口径）",
-            "",
-            f"- 引擎模式：`{s.mode}`（MockEmbedding + Qdrant 内存，确定性）",
-            f"- 样本：{report.n_cases} 条 gold（字段级 Recall/MRR 逐例见下表）",
-            f"- top_k：{s.eval.top_k}",
-            "",
-            "## 汇总",
-            "",
-            f"- **Recall@{s.eval.top_k} = {recall_line}**（门禁 ≥ {t.hybrid_recall_at_k}）",
-            f"- **MRR@{s.eval.top_k} = {mrr_line}**（门禁 ≥ {t.hybrid_mrr_at_k}）",
-            f"- 达标样例：{report.n_passed}/{report.n_cases}",
-            "",
-            "## 门禁结论",
-            "",
-            f"**{'PASS ✅' if report.gate_ok else 'FAIL ❌'}**",
-            "",
-            "## 逐例明细",
-            "",
-            "| # | 问题 | gold | top-k 命中 | Recall | MRR | 达标 |",
-            "|---|------|------|-----------|--------|-----|------|",
-            *rows,
-            "",
-        ]
-    )
+    lines = [
+        "# shopguide-rag 评测报告（离线 mock 口径）",
+        "",
+        f"- 引擎模式：`{s.mode}`（MockEmbedding + Qdrant 内存 + 确定性规则 Agent，可回放）",
+        f"- 检索 top_k：{s.eval.top_k}",
+        "",
+        "## ① 检索门禁（词面可达 gold，防召回回退）",
+        "",
+        f"- 样本：{retrieval.n_cases} 条 gold｜达标 {retrieval.n_passed}",
+        f"- **Recall@{s.eval.top_k} = {_fmt(retrieval.avg_recall_at_k)}**（阈值 ≥ {t.hybrid_recall_at_k}）",
+        f"- **MRR@{s.eval.top_k} = {_fmt(retrieval.avg_mrr_at_k)}**（阈值 ≥ {t.hybrid_mrr_at_k}）",
+        "",
+        "| 问题 | gold | 命中 | Recall | MRR | 达标 |",
+        "|------|------|------|--------|-----|------|",
+    ]
+    for c in retrieval.cases:
+        lines.append(
+            f"| {c.question} | {'、'.join(c.gold_product_ids)} | "
+            f"{'、'.join(c.hit_product_ids) or '无命中'} | {c.recall_at_k:.2f} | "
+            f"{c.mrr_at_k:.2f} | {'✅' if c.passed else '❌'} |"
+        )
+    lines += [
+        "",
+        "## ② Agent 门禁（回答有据 / 好例不误拒 / 不可答全拦）",
+        "",
+        f"- 预期可答：{agent.n_answerable}｜对抗不可答：{agent.n_unanswerable}",
+        f"- **grounded_rate = {_fmt(agent.grounded_rate, 4)}**（有据：引用非空且全在库｜阈值 ≥ {t.grounded_rate_min}）",
+        f"- **bad_refusal_rate = {_fmt(agent.bad_refusal_rate, 4)}**（好例被正确服务，无误拒｜阈值 ≥ {t.bad_refusal_rate_min}）",
+        f"- **unanswerable_refusal_rate = {_fmt(agent.unanswerable_refusal_rate, 4)}**（对抗不可答被拦｜要求 = {UNANSWERABLE_REFUSAL_REQ}）",
+        "",
+        "### 对抗不可答明细",
+        "",
+        "| 问题 | 判定 | 原因 |",
+        "|------|------|------|",
+    ]
+    for c in agent.cases:
+        if c.expected_answerable:
+            continue
+        served_mark = "❌ 未拒绝" if c.served else "✅ 拒绝"
+        lines.append(f"| {c.query} | {served_mark} | {c.reply.refusal_reason or c.reply.refusal_kind} |")
+    return "\n".join(lines) + "\n"
+
+
+def _gate_ok(retrieval: RetrievalReport, agent: AgentEvalReport, s: Settings) -> bool:
+    t = s.eval.thresholds
+    checks = [
+        (retrieval.avg_recall_at_k, t.hybrid_recall_at_k, "检索 Recall"),
+        (retrieval.avg_mrr_at_k, t.hybrid_mrr_at_k, "检索 MRR"),
+        (agent.grounded_rate, t.grounded_rate_min, "Agent grounded_rate"),
+        (agent.bad_refusal_rate, t.bad_refusal_rate_min, "Agent bad_refusal_rate"),
+        (agent.unanswerable_refusal_rate, UNANSWERABLE_REFUSAL_REQ, "不可答拦截率"),
+    ]
+    ok = True
+    for value, req, name in checks:
+        if value is None or value < req:
+            ok = False
+            print(f"[gate] ✗ {name}: {value} < {req}")
+    return ok
 
 
 async def main() -> int:
     s = get_settings()
-    report = await _run_eval(s)
+    retrieval, agent = await _eval_all(s)
+    md = _render_markdown(retrieval, agent, s)
     out_dir = s.repo_root / s.eval.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "eval_report.md"
-    path.write_text(_render_markdown(report, s), encoding="utf-8")
-    print(_render_markdown(report, s))
+    path.write_text(md, encoding="utf-8")
+    print(md)
+    ok = _gate_ok(retrieval, agent, s)
     print(f"[eval] 报告已写：{path.relative_to(s.repo_root)}")
-    print(
-        f"[eval] 结论：{'PASS' if report.gate_ok else 'FAIL'} "
-        f"（Recall@5={report.avg_recall_at_k} MRR@5={report.avg_mrr_at_k}）"
-    )
-    return 0 if report.gate_ok else 1
+    print(f"[eval] 结论：{'PASS ✅' if ok else 'FAIL ❌'}")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

@@ -42,17 +42,31 @@ _COMPARE_WORDS = ["对比", "区别", "哪个", "谁更", "差异", "有什么�
 _BUDGET_WORDS = ["预算", "以内", "不超过", "元以内", "之内", "封顶", "多少元"]
 
 
+# 真机性能类不可答：需"指向某具体型号"才拒绝 —— 否则"推荐一台能玩3A的笔记本"
+# 仍是合法导购（应召回独显本）。指向词 + 能力词同时出现才判"评这台机器能不能跑"。
+_BENCH_POINTERS = ("这台", "它能", "它能不能", "我的这台", "跑分", "帧率", "实测", "测评", "发热", "散热")
+_BENCH_CAPS = ("能玩", "跑得动", "性能", "游戏表现", "帧")
+
+_HINTS: dict[RefusalKind, str] = {
+    "trade": "本项目只做导购推荐，不做下单/支付等交易动作",
+    "realtime": "库内价格为静态演示样例，无实时渠道/补贴数据源",
+    "future": "无新品发布/爆料类信息源，无法预测",
+    "benchmark": "具体型号的真机性能/帧率需实测评测，库内规格不能代替体验数据",
+}
+
+
+def _is_benchmark_ask(text: str) -> bool:
+    return any(p in text for p in _BENCH_POINTERS) and any(c in text for c in _BENCH_CAPS)
+
+
 def classify_refusal(text: str) -> tuple[RefusalKind | None, str]:
     """不可答硬规则判定：返回 (类别, 提示) 或 (None, '')。"""
+    if _is_benchmark_ask(text):
+        return "benchmark", _HINTS["benchmark"]
     for kind, words in _REFUSAL_RULES:
         for w in words:
             if w in text:
-                hint = {
-                    "trade": "本项目只做导购推荐，不做下单/支付等交易动作",
-                    "realtime": "库内价格为静态演示样例，无实时渠道/补贴数据源",
-                    "future": "无新品发布/爆料类信息源，无法预测",
-                }[kind]
-                return kind, hint
+                return kind, _HINTS[kind]
     return None, ""
 
 

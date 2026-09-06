@@ -79,6 +79,21 @@ def test_realtime_price_refusal(runtime: AgentRuntime) -> None:
     assert r.refused and r.refusal_kind == "realtime"
 
 
+def test_benchmark_refusal(runtime: AgentRuntime) -> None:
+    """问"这台具体型号能不能跑"需真机实测 → 拒绝（不给规格想当然）。"""
+    r = _ask(runtime, "这台华为笔记本能玩 3A 大作吗")
+    assert r.refused and r.refusal_kind == "benchmark"
+    assert r.recommendations == []
+
+
+def test_recommend_capable_laptop_not_refused(runtime: AgentRuntime) -> None:
+    """"推荐一台能玩3A的笔记本"是合法导购（没指向具体型号）→ 应召回独显本而非拒绝。"""
+    r = _ask(runtime, "推荐一台能玩 3A 大作的笔记本")
+    assert r.answerable and not r.refused
+    assert r.recommendations
+    assert any(rec["category"] == "laptop" for rec in r.recommendations)
+
+
 def test_future_refusal(runtime: AgentRuntime) -> None:
     r = _ask(runtime, "华为 Mate 60 Pro 下一代什么时候发布")
     assert r.refused and r.refusal_kind == "future"
