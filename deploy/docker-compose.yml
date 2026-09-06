@@ -1,0 +1,63 @@
+# shopguide-rag 真服务依赖：Qdrant（向量检索）+ Postgres 16（会话 JSONB）+ Redis 7（缓存）
+#
+# 启动：  cd deploy && docker compose up -d
+# 停止：  docker compose down            （加 -v 连数据卷一起删）
+# 数据：  都写在命名卷里 → 落在 Docker 的数据根（本机 = D:\develop\docker-data，见 .docker/daemon.json）
+#
+# 镜像走 Docker Hub，本机已配 DaoCloud 镜像加速（C:\Users\<user>\.docker\daemon.json
+# registry-mirrors=docker.m.daocloud.io），无需额外设置。
+name: shopguide
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.0  # 与 qdrant-client 1.19 主版本对齐，消版本警告
+    container_name: shopguide-qdrant
+    ports:
+      - "6333:6333"   # REST/gRPC
+      - "6334:6334"   # 内部 gRPC
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      # qdrant 镜像无 curl/wget → 用 bash 的 /dev/tcp 做 TCP 探活（端口通即服务就绪）
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  postgres:
+    image: postgres:16
+    container_name: shopguide-pg
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-shopguide}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shopguide_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-shopguide}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shopguide} -d ${POSTGRES_DB:-shopguide}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7
+    container_name: shopguide-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  qdrant_storage:
+  pg_data:
+  redis_data:

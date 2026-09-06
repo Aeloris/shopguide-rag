@@ -2,6 +2,7 @@
 """POST /api/chat —— 导购对话主入口（文字 + 可选图片，返回结构化回执并落会话）。"""
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 from typing import Any
@@ -34,10 +35,11 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     if not payload.message.strip() and not payload.images:
         raise HTTPException(status_code=422, detail="message 与 images 至少提供一个")
 
+    # SessionStore 是同步接口（PG 走 psycopg 阻塞驱动）→ 放线程池，别占事件循环
     sid = payload.session_id
-    if sid is not None and not store.exists(sid):
+    if sid is not None and not await asyncio.to_thread(store.exists, sid):
         raise HTTPException(status_code=404, detail=f"会话不存在：{sid}")
-    sid = sid or store.create_session()
+    sid = sid or await asyncio.to_thread(store.create_session)
 
     image_bytes = _decode_images(payload.images) if payload.images else None
     reply = await runtime.ask(payload.message, images=image_bytes)
@@ -46,7 +48,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     user_meta: dict[str, Any] = {"content": payload.message}
     if image_bytes:
         user_meta["images"] = len(image_bytes)
-    store.append_message(sid, "user", user_meta)
-    store.append_message(sid, "assistant", {"reply": reply.model_dump()})
+    await asyncio.to_thread(store.append_message, sid, "user", user_meta)
+    await asyncio.to_thread(store.append_message, sid, "assistant", {"reply": reply.model_dump()})
 
     return ChatResponse(session_id=sid, reply=reply)

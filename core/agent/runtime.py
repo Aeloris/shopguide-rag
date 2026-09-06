@@ -19,7 +19,7 @@ from core.catalog.loader import Catalog, load_catalog
 from core.embeddings import EmbeddingProvider, get_embedding_provider
 from core.ingest import Ingester
 from core.retriever import Retriever
-from core.vector_store import ProductVectorStore
+from core.vector_factory import build_store
 from llm.vision import VisionExtraction, get_vision_provider
 
 
@@ -38,12 +38,16 @@ class AgentRuntime:
         path: str = ":memory:",
         embedding: EmbeddingProvider | None = None,
     ) -> "AgentRuntime":
-        """自举离线/本地 Agent 运行时（向量库 path=:memory: 测试 / 本地文件可持久化）。"""
+        """自举 Agent 运行时。
+
+        向量库由 core.vector_factory.build_store 按 settings.vector_db.provider 构造：
+        - qdrant_local：path=:memory:（测试）或本地 data/qdrant（离线可持久化）；
+        - qdrant_server：阶段 B，连 Docker 里 Qdrant 容器（url 由 config 给），
+          path 参数被忽略 —— 同一集合名 shopguide_products 入库/检索。
+        """
         s = settings or get_settings()
         catalog = load_catalog(s)
-        store = ProductVectorStore(
-            collection="agent", dimension=s.embedding.dimension, path=path
-        )
+        store = build_store(s, dimension=s.embedding.dimension, path_override=path)
         emb = embedding or get_embedding_provider(s)
         await Ingester(store, emb).rebuild(catalog)
         retriever = Retriever(store, emb, s)

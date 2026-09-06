@@ -11,8 +11,12 @@
 - 多模态：视觉 Provider 抽象（mock 离线 / Claude 阶段 B 可切换）
 - 评测：gold 检索集 + 对抗不可答集 → 门禁退出码（**诚实口径，见下**）
 
-**当前阶段 A 全部完成**：`uv run pytest` 67 全绿、`uv run python -m evals.run` 门禁全 PASS，
-无 Docker、无任何 API key 即可复现。阶段 B（Docker + 真视觉/真服务）见 [docs/architecture.md](docs/architecture.md)。
+**进度**：
+- 阶段 A（离线底座）完成：`uv run pytest` **77 全绿**、`uv run python -m evals.run` 门禁全 PASS，
+  无 Docker、无任何 API key 即可复现。
+- 阶段 B（Docker 真服务**数据平面**）落地：Postgres 16 JSONB 会话 + Redis 缓存 + Qdrant server 检索，
+  集成测试 4 条在真容器上全绿（见"真服务（Docker）"）。真 Claude 视觉/LLM 与真 embedding 需真实
+  API key，未接前 dev 模式保持 mock（诚实口径，取舍见 [docs/architecture.md](docs/architecture.md)）。
 
 ---
 
@@ -20,7 +24,7 @@
 
 ```bash
 uv sync                    # 安装依赖（含 langgraph）
-uv run pytest              # 67 tests 全绿（离线确定性）
+uv run pytest              # 77 tests 全绿（离线确定性；集成测试无容器自动跳过）
 uv run python -m evals.run # 评测门禁：PASS 退出码 0，报告在 data/eval/eval_report.md
 uv run uvicorn app.main:app --port 8000   # 起 API（离线即可）
 ```
@@ -47,6 +51,32 @@ curl -s 'localhost:8000/api/products?category=phone&max_price=3000'
 
 OpenAPI 文档：`http://localhost:8000/docs`
 
+## 真服务（Docker，阶段 B 数据平面已落地）
+
+`deploy/docker-compose.yml` 起三个依赖容器，dev 配置下会话/缓存/向量库走真服务：
+
+```bash
+cd deploy && docker compose up -d   # postgres:16 + redis:7 + qdrant（首次拉镜像走 DaoCloud 加速）
+docker compose ps                   # 等三个都 (healthy)
+cd ..
+cp .env.example .env                # 填 DATABASE_URL / REDIS_URL（默认值见 deploy/.env.docker）
+export SHOPGUIDE_CONFIG=config/config.dev.yaml   # Windows PowerShell: $env:SHOPGUIDE_CONFIG="..."
+uv run uvicorn app.main:app --port 8000          # 此即 dev 真服务
+```
+
+> **诚实边界**：dev 模式只把"数据平面"切真（Qdrant server 检索 / Postgres JSONB 会话 / Redis
+> 缓存），LLM/视觉/embedding 仍是 mock —— 检索走词法召回、不宣称语义；接真 Claude / 真
+> embedding 只需改 provider 并填 key，图与工具代码不动。
+
+集成验证（需容器在跑；探测不可达会自动跳过，不进离线计数）：
+
+```bash
+SHOPGUIDE_DOCKER_INT=1 uv run pytest tests/test_integration_docker.py -q   # 4 passed
+```
+
+容器数据都在命名卷，落 Docker 数据根（本机已挪到 `D:\develop`，不占 C 盘）。
+停止：`docker compose down`（加 `-v` 连数据卷一起删）。
+
 ## 评测结果（本评测集口径，非能力宣称）
 
 离线 mock（MockEmbedding + Qdrant 内存 + 确定性规则 Agent）逐次回放：
@@ -72,13 +102,15 @@ core/catalog  商品知识库：Product schema + 13 SKU 种子 + loader
 core/ingest   Catalog → Markdown → MockEmbedding → Qdrant 幂等整包重建
 core/retriever 自研中文分词 + BM25 + Dense → RRF(k=60) → 词法重排
 core/agent    LangGraph 状态机：decide→run_tool↺ / finalize / refuse + 三工具
-core/store    会话存储抽象：InMemory / File（PG/Redis 阶段 B 同接口）
-llm/          Provider 抽象：MockVision(离线) / anthropic 阶段 B 占位
-app/          FastAPI：/health + /api/{chat,search,products}
+config/       pydantic 分节强类型配置 + config.yaml（offline）/ config.dev.yaml（真服务）
+core/store    会话存储：InMemory / File / Postgres JSONB；缓存：off / memory / Redis（同接口）
+llm/          Provider 抽象：MockVision(离线) / anthropic 占位（需 key）
+app/          FastAPI：/health + /api/{chat,search,products}（search 带热点缓存）
 evals/        gold 检索集 + 对抗集 + 检索/Agent harness + run.py 门禁
 fixtures/     catalog/products.json(13 SKU) + vision/sample.json
 scripts/      make_catalog.py（确定性生成种子）/ smoke_core.py
-tests/        67 个离线确定性测试
+deploy/       docker-compose.yml(postgres16/redis7/qdrant) + .env.docker
+tests/        77 离线确定性测试 + 4 Docker 集成测试（无容器自动跳过）
 docs/         架构 / 检索 / Agent / 评测 四篇
 ```
 
@@ -95,7 +127,8 @@ docs/         架构 / 检索 / Agent / 评测 四篇
 ## 明确不做（v1 边界）
 
 - 不做 ES/双引擎；不做真实价格爬虫与实时比价；不做下单/支付；
-- 不做大规模并发压测宣称；不做视觉真 OCR（阶段 B 接 Claude 视觉）。
+- 不做大规模并发压测宣称；不做视觉真 OCR / 真 LLM / 真 embedding（provider 已留好，
+  需真实 API key —— 未接前离线与 dev 都是 mock，不虚标语义）。
 
 ## License
 

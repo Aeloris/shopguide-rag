@@ -114,8 +114,15 @@ class AgentConfig(BaseModel):
 
 
 class StoreConfig(BaseModel):
-    provider: str = "memory"  # memory | file（PG/Redis 阶段 B）
+    provider: str = "memory"  # memory | file | postgres
     path: str = "./data/sessions"
+    dsn_env: str = "DATABASE_URL"  # provider=postgres 时从该环境变量读 DSN
+
+
+class CacheConfig(BaseModel):
+    provider: str = "off"  # off | memory | redis
+    ttl_sec: int = 300
+    dsn_env: str = "REDIS_URL"
 
 
 class EvalThresholds(BaseModel):
@@ -145,6 +152,7 @@ class Settings(BaseModel):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     store: StoreConfig = Field(default_factory=StoreConfig)
+    cache: CacheConfig = Field(default_factory=CacheConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
 
     @classmethod
@@ -178,10 +186,17 @@ class Settings(BaseModel):
             and self.embedding.provider == "mock"
             and self.vector_db.provider != "qdrant_server"
             and self.store.provider in ("memory", "file")
+            and self.cache.provider in ("off", "memory")
         )
 
 
 @lru_cache(maxsize=1)
 def get_settings(path: str | Path | None = None) -> Settings:
-    """进程内共享同一份配置；测试里想用别的 yaml 可传 path。"""
+    """进程内共享同一份配置；测试里想用别的 yaml 可传 path。
+
+    默认读 config/config.yaml；设了环境变量 SHOPGUIDE_CONFIG 则读该文件（阶段 B
+    dev 模式用它指向 config/config.dev.yaml，一行切换真服务）。
+    """
+    if path is None:
+        path = os.getenv("SHOPGUIDE_CONFIG") or DEFAULT_CONFIG_PATH
     return Settings.from_yaml(path)

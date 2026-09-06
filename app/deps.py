@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import Request
 
 from core.agent import AgentRuntime
+from core.store.cache import Cache
 from core.store.session_store import SessionStore
 
 
@@ -14,3 +15,7 @@ def get_runtime(request: Request) -> AgentRuntime:
 
 def get_session_store(request: Request) -> SessionStore:
     return request.app.state.session_store
+
+
+def get_cache(request: Request) -> Cache:
+    return request.app.state.cache

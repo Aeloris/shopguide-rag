@@ -58,8 +58,15 @@ agent:
   min_citations: 1        # 无任何检索引用就不硬答 → 转引导提问
 
 store:
-  provider: memory        # memory | file（会话存储；PG/Redis 阶段 B 接入）
+  provider: memory        # memory | file | postgres（真服务见 config.dev.yaml）
   path: ./data/sessions
+  dsn_env: DATABASE_URL   # provider=postgres 时，从该环境变量读连接串
+
+# ---- 缓存（检索结果热点缓存；dev 模式用 Redis）----
+cache:
+  provider: "off"         # "off" | memory | redis（off 是 YAML 布尔字，须加引号）
+  ttl_sec: 300
+  dsn_env: REDIS_URL      # provider=redis 时，从该环境变量读连接串
 
 eval:
   output_dir: ./data/eval

@@ -1,0 +1,35 @@
+# ============ shopguide-rag dev 覆盖配置（阶段 B：真服务）============
+# 用法：Docker 起来后，用本文件启动即可切到"真服务"层：
+#   export SHOPGUIDE_CONFIG=config/config.dev.yaml
+#   uv run uvicorn app.main:app --port 8000
+# （未设置的其他节回落到 config/config.yaml / pydantic 默认。）
+#
+# 真服务件：
+#   vector_db.qdrant_server  ← deploy/docker-compose.yml 的 qdrant 容器
+#   store.postgres           ← postgres:16 容器（JSONB 会话落库）
+#   cache.redis              ← redis:7 容器（检索热点缓存）
+# LLM/视觉/embedding：真 Provider 需真实 key，未配置前保持 mock —— 词法(BM25)+重排
+# 仍承载召回，检索链路在 qdrant server 上照常工作（诚实口径：embedding mock 无语义）。
+mode: dev
+
+llm:
+  provider: mock          # anthropic 需 ANTHROPIC_API_KEY（阶段 B Provider 接入后切）
+
+vision:
+  provider: mock          # anthropic 需 ANTHROPIC_API_KEY
+
+embedding:
+  provider: mock          # dashscope 需 DASHSCOPE_API_KEY（text-embedding-v3）
+
+vector_db:
+  provider: qdrant_server
+  url: http://localhost:6333
+
+store:
+  provider: postgres
+  dsn_env: DATABASE_URL
+
+cache:
+  provider: redis
+  ttl_sec: 300
+  dsn_env: REDIS_URL

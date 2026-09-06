@@ -41,12 +41,25 @@ def test_file_store_tolerates_corruption(tmp_path) -> None:
     assert store.get_messages(sid) == []
 
 
-def test_factory_unknown_provider_raises() -> None:
+def test_factory_postgres_without_dsn_fails_fast(monkeypatch) -> None:
+    """provider=postgres 但 DATABASE_URL 缺失 → 启动期就报清晰错误，不等到运行期。"""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     s = Settings.from_yaml()
-    s.store.provider = "postgres"  # 阶段 B 才接入 → 现在就报错防误配
+    s.store.provider = "postgres"
     try:
         get_session_store(s)
     except ValueError as e:
-        assert "postgres" in str(e)
+        assert "DATABASE_URL" in str(e)
+    else:  # pragma: no cover
+        raise AssertionError("缺 DSN 应抛 ValueError")
+
+
+def test_factory_unknown_provider_raises() -> None:
+    s = Settings.from_yaml()
+    s.store.provider = "hdf5"  # 从未支持的 provider → 报错防误配
+    try:
+        get_session_store(s)
+    except ValueError as e:
+        assert "hdf5" in str(e)
     else:  # pragma: no cover
         raise AssertionError("未知 provider 应抛 ValueError")

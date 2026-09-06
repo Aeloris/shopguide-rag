@@ -20,21 +20,24 @@
  混合检索：BM25(自研中文分词) + Dense(Mock/Qdrant) → RRF(k=60) → 词法重排 → top5
 ```
 
-## 两阶段演进（为什么先"离线可跑"再"Docker 真服务"）
+## 三阶段演进（先离线可跑 → Docker 真服务数据平面 → 真 LLM/embedding）
 
-本机硬约束：无 Docker、无 PG/ES/Qdrant/Redis 服务、可用 LLM key 仅 Anthropic。
-因此**真服务可切换的代码先落**，真服务留阶段 B —— 同一套 provider 工厂，业务零改动：
+硬约束决定了顺序：装 Docker 前要能跑 → **真服务可切换的代码先落**；Docker 就绪后先切
+**数据平面**（PG/Redis/Qdrant server，无 key 也能验）；最后等有真实 API key 再接 provider。
+同一套工厂，业务代码零改动：
 
-| 能力 | 阶段 A（现在，离线默认） | 阶段 B（Docker 装好后） |
-|---|---|---|
-| Embedding | MockEmbedding（确定性伪向量） | DashScope/text-embedding-v3 或本地 |
-| 向量库 | Qdrant `:memory:` / 本地 path | Qdrant server（`deploy/docker-compose`） |
-| 视觉 | MockVision（fixture 固定返回） | Claude 视觉（anthropic provider） |
-| LLM 决定器 | MockDecision（确定性规则） | 同接口接 Claude 结构化输出 |
-| 会话存储 | InMemory / File | Postgres JSONB（同 SessionStore 接口） |
-| 缓存 | 无 | Redis（同 Cache 接口，预留） |
+| 能力 | 离线默认（config.yaml） | 真服务数据平面（config.dev.yaml，✅ 已落地） | 真 key 接入（待） |
+|---|---|---|---|
+| 向量库 | Qdrant `:memory:` / 本地 path | Qdrant server（compose，✅ 集成测试过） | — |
+| 会话存储 | InMemory / File | Postgres 16 JSONB（✅） | — |
+| 缓存 | off（NullCache） | Redis 7（✅） | — |
+| Embedding | MockEmbedding（确定性伪向量） | — | DashScope / 本地 |
+| 视觉 | MockVision（fixture 固定返回） | — | Claude 视觉（anthropic） |
+| LLM 决定器 | MockDecision（确定性规则） | — | 同接口接 Claude |
 
-切 `config.mode=dev` + 真 key 后，`AgentRuntime.build()` / `Retriever` / 路由代码都不改。
+切换点都收敛在工厂：向量库 `vector_factory.build_store`（`vector_db.provider`）、会话
+`get_session_store`、缓存 `get_cache`。dev 缺真 key 的部分维持 mock —— 检索是词法召回、
+**不宣称语义**；真实语义评测待真 embedding 后另开量表（不把 mock 数字搬到真服务宣称）。
 
 ## 关键取舍（面试可展开）
 
@@ -48,12 +51,20 @@
 
 ## 运行方式
 
-- 离线：`uv run pytest` · `uv run python -m evals.run` · `uv run uvicorn app.main:app --port 8000`
-- 测试/评测与业务共用同一批 provider 工厂，注入 `path=":memory:"` 保证隔离、不污染 `./data`。
+- 离线（无 Docker）：`uv run pytest` · `uv run python -m evals.run` ·
+  `uv run uvicorn app.main:app --port 8000`（mode=offline，默认）。测试/评测与业务共用同一批
+  provider 工厂，注入 `path=":memory:"` 保证隔离、不污染 `./data`。
+- 真服务数据平面（Docker）：`cd deploy && docker compose up -d` → `.env` 填 DATABASE_URL/
+  REDIS_URL → `SHOPGUIDE_CONFIG=config/config.dev.yaml uv run uvicorn app.main:app --port 8000`。
+- 集成测试（需容器在跑）：`SHOPGUIDE_DOCKER_INT=1 uv run pytest tests/test_integration_docker.py`
+  —— 探测 PG/Redis/Qdrant 不可达即 skip，不进默认离线计数。
 
-## 阶段 B 待办（Roadmap）
+## 阶段 B 进度（Roadmap）
 
-1. `deploy/docker-compose.yml`：postgres:16 + redis:7 + qdrant
-2. SessionStore Postgres JSONB 适配器 + Redis cache + 向量切 qdrant server；`.env.docker`
-3. 真 LLM/视觉联调（Claude）+ 真 embedding；集成验证 + 一次真实图文对话冒烟
-4. 语义评测另开量表（mock 数值不迁移到真服务宣称）
+- [x] 1. `deploy/docker-compose.yml`：postgres:16 + redis:7 + qdrant（含健康检查；镜像经
+      DaoCloud 加速，已实测 `up -d` 三服务 healthy）
+- [x] 2. Postgres JSONB SessionStore + Redis Cache + 向量切 qdrant server（`config.dev.yaml`
+      / `.env.docker`）；集成测试 4 条在真服务上全绿：会话跨连接回读、Redis TTL 过期、
+      qdrant server 检索召回、app 双轮对话落 PG + `/api/search` 走 Redis
+- [ ] 3. 真 LLM/视觉联调（Claude）+ 真 embedding —— 需真实 API key，未接前 dev 保持 mock
+- [ ] 4. 语义评测另开量表（mock 数值不迁移到真服务宣称）

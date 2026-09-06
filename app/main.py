@@ -17,6 +17,7 @@ from app.routers import chat, products, search
 from app.schemas import ProductListItem
 from config.settings import Settings, get_settings
 from core.agent import AgentRuntime
+from core.store.cache import Cache, get_cache
 from core.store.session_store import SessionStore, get_session_store
 
 
@@ -24,21 +25,26 @@ def create_app(
     *,
     runtime: AgentRuntime | None = None,
     session_store: SessionStore | None = None,
+    cache: Cache | None = None,
     settings: Settings | None = None,
 ) -> FastAPI:
     s = settings or get_settings()
     built_runtime = runtime
     built_store = session_store
+    built_cache = cache
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal built_runtime, built_store
+        nonlocal built_runtime, built_store, built_cache
         if built_runtime is None:  # 生产路径：启动时构建一次，供所有请求复用
             built_runtime = await AgentRuntime.build(s)
         if built_store is None:
             built_store = get_session_store(s)
+        if built_cache is None:
+            built_cache = get_cache(s)  # offline→NullCache；dev→Redis（掉线降级 miss）
         app.state.runtime = built_runtime
         app.state.session_store = built_store
+        app.state.cache = built_cache
         yield
 
     app = FastAPI(title="shopguide-rag", version="0.1.0", lifespan=lifespan)
