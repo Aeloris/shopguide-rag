@@ -14,6 +14,9 @@ from config.settings import Settings, get_settings
 from core.embeddings.base import EmbeddingProvider
 from core.embeddings.mock_embedding import MockEmbedding
 
+# DashScope text-embedding-v3 单请求上限（实测 >10 返回 400 InvalidParameter）
+_MAX_EMBED_BATCH = 10
+
 
 class DashScopeEmbedding:
     """真文本向量：阿里云百炼 text-embedding-v3（OpenAI 兼容接口）。
@@ -47,26 +50,37 @@ class DashScopeEmbedding:
             )
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        payload: dict = {"model": self._model, "input": texts, "encoding_format": "float"}
-        # text-embedding-v3 支持 dimensions≤1024 控制输出维；等于默认(1024)时省略即可
-        if 0 < self.dimension < 1024:
-            payload["dimensions"] = self.dimension
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        # 端点单请求上限 _MAX_EMBED_BATCH 条 → 分批，返回序与输入序一致
+        vectors: list[list[float]] = []
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(
-                f"{self._base}/embeddings", headers=headers, json=payload
-            )
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"DashScope embedding HTTP {resp.status_code}: {resp.text[:200]}"
+            for i in range(0, len(texts), _MAX_EMBED_BATCH):
+                chunk = texts[i : i + _MAX_EMBED_BATCH]
+                payload: dict = {
+                    "model": self._model,
+                    "input": chunk,
+                    "encoding_format": "float",
+                }
+                # text-embedding-v3 支持 dimensions≤1024 控制输出维；等于默认(1024)时省略即可
+                if 0 < self.dimension < 1024:
+                    payload["dimensions"] = self.dimension
+                headers = {"Authorization": f"Bearer {self._api_key}"}
+                resp = await client.post(
+                    f"{self._base}/embeddings", headers=headers, json=payload
                 )
-            data = resp.json().get("data", [])
-        ordered = [d["embedding"] for d in sorted(data, key=lambda d: d.get("index", 0))]
-        if len(ordered) != len(texts):
-            raise RuntimeError(
-                f"DashScope embedding 返回 {len(ordered)} 条，输入 {len(texts)} 条"
-            )
-        return ordered
+                if resp.status_code != 200:
+                    raise RuntimeError(
+                        f"DashScope embedding HTTP {resp.status_code}: {resp.text[:200]}"
+                    )
+                data = resp.json().get("data", [])
+                ordered = [
+                    d["embedding"] for d in sorted(data, key=lambda d: d.get("index", 0))
+                ]
+                if len(ordered) != len(chunk):
+                    raise RuntimeError(
+                        f"DashScope embedding 返回 {len(ordered)} 条，输入 {len(chunk)} 条"
+                    )
+                vectors.extend(ordered)
+        return vectors
 
 
 def get_embedding_provider(settings: Settings | None = None) -> EmbeddingProvider:

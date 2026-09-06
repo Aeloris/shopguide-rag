@@ -10,8 +10,9 @@
 #              = DeepSeek api.deepseek.com/anthropic，模型须用其名称如 deepseek-chat）。
 #   ⏳ vision  mock —— 当前端点(DeepSeek)无图片能力；有带视觉的兼容端点/官方 Claude key 后，
 #              把 vision.provider 改 anthropic 即接（AnthropicVision 已实现，协议层就绪）。
-#   ⏳ embedding mock —— 需 DASHSCOPE_API_KEY 才切 dashscope（DashScopeEmbedding 已实现；
-#              无 key 时检索是词法召回，不宣称语义）。
+#   ✅ embedding dashscope —— 真语义向量 text-embedding-v3（.env 需 DASHSCOPE_API_KEY）；
+#              build 时用真向量重建 qdrant_server 集合，检索为语义召回。语义上限见
+#              evals/run_semantic.py（离线 mock 对照量表），不虚标。
 # 真 LLM 只决定"下一步调哪个工具"：不可答拒绝仍是代码硬规则、预算/比参仍是代码做。
 mode: dev
 
@@ -23,7 +24,7 @@ vision:
   provider: mock         # anthropic 需带视觉的端点/官方 Claude key（未具备前 mock）
 
 embedding:
-  provider: mock         # dashscope 需 DASHSCOPE_API_KEY（未具备前 mock，词法召回）
+  provider: dashscope    # text-embedding-v3 真语义向量；需 .env 的 DASHSCOPE_API_KEY
 
 vector_db:
   provider: qdrant_server

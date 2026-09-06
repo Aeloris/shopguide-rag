@@ -12,14 +12,15 @@
 - 评测：gold 检索集 + 对抗不可答集 → 门禁退出码（**诚实口径，见下**）
 
 **进度**：
-- 阶段 A（离线底座）完成：`uv run pytest` **84 全绿**、`uv run python -m evals.run` 门禁全 PASS，
+- 阶段 A（离线底座）完成：`uv run pytest` **86 全绿**、`uv run python -m evals.run` 门禁全 PASS，
   无 Docker、无任何 API key 即可复现。
 - 阶段 B（Docker 真服务**数据平面**）落地：Postgres 16 JSONB 会话 + Redis 缓存 + Qdrant server 检索，
   集成测试 4 条在真容器上全绿（见"真服务（Docker）"）。
-- 阶段 B（**真 LLM 决定器**，live）：LangGraph 调度走真实 LLM —— Anthropic 兼容 Messages API，
-  端点/模型全可配（本机演示端点=DeepSeek `deepseek-chat`）。**视觉与语义 embedding 未接**（当前端点
-  无图片能力、缺 DashScope key）→ 保持 mock，接入点已就绪（诚实口径，取舍见
-  [docs/architecture.md](docs/architecture.md)）。
+- 阶段 B（**真 LLM 决定器 + 真语义 embedding**，live）：LangGraph 调度走真实 LLM —— Anthropic 兼容
+  Messages API（端点/模型全可配，本机演示端点=DeepSeek `deepseek-chat`）；Dense 语义路已切
+  DashScope `text-embedding-v3` 真向量（语义量表实测见下）。**视觉仍 mock**（当前端点无图片能力，
+  真视觉可走同 key 的 Qwen-VL，见 [docs/architecture.md](docs/architecture.md) Roadmap 3b）。
+  诚实口径与取舍见 [docs/architecture.md](docs/architecture.md)。
 
 ---
 
@@ -27,7 +28,7 @@
 
 ```bash
 uv sync                    # 安装依赖（含 langgraph）
-uv run pytest              # 84 tests 全绿（离线确定性；集成测试无容器自动跳过）
+uv run pytest              # 86 tests 全绿（离线确定性；集成测试无容器自动跳过）
 uv run python -m evals.run # 评测门禁：PASS 退出码 0，报告在 data/eval/eval_report.md
 uv run uvicorn app.main:app --port 8000   # 起 API（离线即可）
 ```
@@ -91,10 +92,27 @@ uv run uvicorn app.main:app --port 8000
 ```
 
 > **边界**：真 LLM 只决定"下一步调哪个工具"——不可答拒绝仍是代码硬规则、预算/比参仍是代码做，
-> grounding 由白名单构造保证；视觉/语义 embedding 未接时保持 mock（词法召回，不宣称语义）。
-> 本机演示端点=DeepSeek（`api.deepseek.com/anthropic`，模型 `deepseek-chat`）；切官方 Claude 只需
-> 去掉 `ANTHROPIC_BASE_URL` 并把 config 的 `llm.model` 改回 Claude 型号，视觉同理把
-> `vision.provider` 切 anthropic。
+> grounding 由白名单构造保证。live 下 **语义 embedding 已真**（text-embedding-v3，qdrant_server
+> 集合为真向量）；**视觉仍 mock**（当前 LLM 端点无图片能力；真视觉可用同一把 DashScope key 走
+> Qwen-VL，需加 OpenAI 兼容视觉分支，Roadmap 3b）。本机 LLM 演示端点=DeepSeek
+> （`api.deepseek.com/anthropic`，模型 `deepseek-chat`）；切官方 Claude 只需去掉
+> `ANTHROPIC_BASE_URL` 并把 config 的 `llm.model` 改回 Claude 型号。
+
+### 真语义 embedding 与语义量表（live，3c 已落地）
+
+Dense 语义路从"确定性伪向量"切到 **DashScope text-embedding-v3** 真向量（`embedding.provider=dashscope`
+＋ `.env` 的 `DASHSCOPE_API_KEY`）；`build` 时 qdrant_server 集合全量重建为真向量。语义上限用独立
+对照量表实测（`uv run python -m evals.run_semantic`，需容器 + key；**不并入离线门禁**），隔离只测
+Dense 语义路（换 embedding 真正影响的那条路，13 SKU 改写问法、top-5）：
+
+| Dense 语义路 | Recall@5 | MRR@5 |
+|---|---|---|
+| 离线 mock（确定性伪向量≈噪声） | 0.846 | 0.531 |
+| **真 text-embedding-v3（live 实测）** | **1.000** | **0.949** |
+
+对照报告（逐题命中 + "为什么该召回"rationale）：`data/eval/eval_report.semantic.md`。
+**诚实口径**：语料仅 13 SKU、gold 按人工语义判断标注 —— 该增益是"Dense 路接真向量"的功能验证，
+非通用语义能力宣称；线上混合（BM25+语义）召回不因换真向量变差。
 
 ## 评测结果（本评测集口径，非能力宣称）
 
@@ -111,7 +129,8 @@ uv run uvicorn app.main:app --port 8000
 **诚实声明**：以上数字只对"13 个 3C SKU + 12 条词面可达 gold + 4 条对抗不可答"的
 **离线语料**成立，是**防引擎回退的回归门禁**，不是"我的检索/理解能力有多强"。原因：
 mock 向量无语义、决定器是确定性规则——召回主要靠词法、Agent 主要验证链路与防幻觉结构。
-真正的语义上限要用真 embedding + 真 LLM 评测（阶段 B 后另开量表），本仓库不虚标。
+真正的语义上限在 live 用真 embedding 另开的**语义量表**实测（见上，`data/eval/eval_report.semantic.md`），
+本仓库不把 mock 数字搬到语义宣称，不虚标。
 
 ## 目录
 
@@ -125,11 +144,11 @@ config/       pydantic 分节强类型配置 + config.yaml（offline）/ config.
 core/store    会话存储：InMemory / File / Postgres JSONB；缓存：off / memory / Redis（同接口）
 llm/          Provider 抽象：MockVision(离线) / anthropic 占位（需 key）
 app/          FastAPI：/health + /api/{chat,search,products}（search 带热点缓存）
-evals/        gold 检索集 + 对抗集 + 检索/Agent harness + run.py 门禁
+evals/        gold 检索集 + 对抗集 + 检索/Agent harness + run.py 门禁 + 语义量表(run_semantic)
 fixtures/     catalog/products.json(13 SKU) + vision/sample.json
 scripts/      make_catalog.py（确定性生成种子）/ smoke_core.py
 deploy/       docker-compose.yml(postgres16/redis7/qdrant) + .env.docker
-tests/        84 离线确定性测试 + 4 Docker 集成测试（无容器自动跳过）
+tests/        86 离线确定性测试 + 4 Docker 集成测试（无容器自动跳过）
 docs/         架构 / 检索 / Agent / 评测 四篇
 ```
 
@@ -146,8 +165,8 @@ docs/         架构 / 检索 / Agent / 评测 四篇
 ## 明确不做（v1 边界）
 
 - 不做 ES/双引擎；不做真实价格爬虫与实时比价；不做下单/支付；
-- 不做大规模并发压测宣称；不做视觉真 OCR / 真 LLM / 真 embedding（provider 已留好，
-  需真实 API key —— 未接前离线与 dev 都是 mock，不虚标语义）。
+- 不做大规模并发压测宣称；不做视觉真 OCR（provider 已留好，真视觉待带图端点/官方 key）。
+  真 LLM 决定器与真语义 embedding 已在 live 接入（.env 供 key）；离线与 dev 保持 mock，不虚标。
 
 ## License
 

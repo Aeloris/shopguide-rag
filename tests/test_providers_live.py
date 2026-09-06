@@ -91,3 +91,72 @@ def asyncio_run(fn, **kw) -> AgentDecision:
     import asyncio
 
     return asyncio.run(fn(**kw))
+
+
+# ---- DashScope embedding 分批（真联调暴露：端点单请求 ≤10 条，400 超限）----
+
+
+class _FakeEmbedResp:
+    status_code = 200
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class _FakeEmbedClient:
+    """记录每次请求的输入条数；向量首位编码"全局序号"以校验顺序与不丢不重。"""
+
+    def __init__(self):
+        self.request_sizes: list[int] = []
+        self._base = 0
+        self._max_seen = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, *, headers=None, json=None):
+        n = len(json["input"])
+        self.request_sizes.append(n)
+        start = self._base
+        self._base += n
+        data = [
+            {"index": i, "embedding": [float(start + i), 0.0]}
+            for i in range(n)
+        ]
+        return _FakeEmbedResp({"data": data})
+
+
+def test_dashscope_embedding_batches_within_limit_and_keeps_order(monkeypatch) -> None:
+    """25 条应拆成 ≤10 的多个请求，返回序与输入序一致（首维=全局序号）。"""
+    import core.embeddings as ce
+
+    fake = _FakeEmbedClient()
+    monkeypatch.setattr(ce.httpx, "AsyncClient", lambda **kw: fake)
+
+    p = ce.DashScopeEmbedding(dimension=2, api_key="sk-fake-for-test")
+    n_texts = 25
+    vecs = asyncio_run(p.embed, texts=[f"text-{i}" for i in range(n_texts)])
+
+    assert fake.request_sizes == [10, 10, 5]  # 严格分批，无超限
+    assert len(vecs) == n_texts
+    assert [round(v[0]) for v in vecs] == list(range(n_texts))  # 顺序一致、不丢不重
+
+
+def test_dashscope_embedding_single_small_batch(monkeypatch) -> None:
+    """≤10 条应单请求（不无谓分批）。"""
+    import core.embeddings as ce
+
+    fake = _FakeEmbedClient()
+    monkeypatch.setattr(ce.httpx, "AsyncClient", lambda **kw: fake)
+
+    p = ce.DashScopeEmbedding(dimension=2, api_key="sk-fake-for-test")
+    vecs = asyncio_run(p.embed, texts=["a", "b"])
+
+    assert fake.request_sizes == [2]
+    assert len(vecs) == 2
