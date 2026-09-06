@@ -13,6 +13,7 @@ import sys
 import pytest
 
 from config.settings import get_settings
+from core.agent import AgentRuntime
 from core.catalog.loader import Catalog, load_catalog
 from core.embeddings.mock_embedding import MockEmbedding
 from core.ingest import Ingester
@@ -58,3 +59,9 @@ def built_retriever(catalog) -> Retriever:
     emb = MockEmbedding(dimension=s.embedding.dimension)
     asyncio.run(Ingester(store, emb).rebuild(catalog))
     return Retriever(store, emb, s)
+
+
+@pytest.fixture(scope="session")
+def runtime() -> AgentRuntime:
+    """离线 Agent 运行时（Catalog + 内存向量库 + LangGraph 图，只读复用，确定性）。"""
+    return asyncio.run(AgentRuntime.build(get_settings()))
